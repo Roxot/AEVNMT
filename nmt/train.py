@@ -22,6 +22,9 @@ import time
 
 import tensorflow as tf
 
+import nmt.djoint as djoint
+
+from .baseline import BaselineModel
 from . import attention_model
 from . import gnmt_model
 from . import inference
@@ -284,7 +287,13 @@ def train(hparams, scope=None, target_session=""):
   if not hparams.attention:
     model_creator = nmt_model.Model
   else:  # Attention
-    if (hparams.encoder_type == "gnmt" or
+    if hparams.joint_model_type == "baseline":
+      model_creator = BaselineModel
+    elif hparams.joint_model_type == "dsimple":
+      model_creator = djoint.SimpleJointModel
+    elif hparams.joint_model_type is not None:
+      raise ValueError("Unknown joint model type: %s" % hparams.joint_model_type)
+    elif (hparams.encoder_type == "gnmt" or
         hparams.attention_architecture in ["gnmt", "gnmt_v2"]):
       model_creator = gnmt_model.GNMTModel
     elif hparams.attention_architecture == "standard":

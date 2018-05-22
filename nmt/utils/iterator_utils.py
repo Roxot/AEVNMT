@@ -25,7 +25,7 @@ __all__ = ["BatchedInput", "get_iterator", "get_infer_iterator"]
 # NOTE(ebrevdo): When we subclass this, instances' __dict__ becomes empty.
 class BatchedInput(
     collections.namedtuple("BatchedInput",
-                           ("initializer", "source", "target_input",
+                           ("initializer", "source", "source_output", "target_input",
                             "target_output", "source_sequence_length",
                             "target_sequence_length"))):
   pass
@@ -69,6 +69,7 @@ def get_infer_iterator(src_dataset,
   return BatchedInput(
       initializer=batched_iter.initializer,
       source=src_ids,
+      source_output=None,
       target_input=None,
       target_output=None,
       source_sequence_length=src_seq_len,
@@ -95,6 +96,7 @@ def get_iterator(src_dataset,
   if not output_buffer_size:
     output_buffer_size = batch_size * 1000
   src_eos_id = tf.cast(src_vocab_table.lookup(tf.constant(eos)), tf.int32)
+  src_sos_id = tf.cast(src_vocab_table.lookup(tf.constant(sos)), tf.int32)
   tgt_sos_id = tf.cast(tgt_vocab_table.lookup(tf.constant(sos)), tf.int32)
   tgt_eos_id = tf.cast(tgt_vocab_table.lookup(tf.constant(eos)), tf.int32)
 
@@ -132,14 +134,15 @@ def get_iterator(src_dataset,
       num_parallel_calls=num_parallel_calls).prefetch(output_buffer_size)
   # Create a tgt_input prefixed with <sos> and a tgt_output suffixed with <eos>.
   src_tgt_dataset = src_tgt_dataset.map(
-      lambda src, tgt: (src,
+      lambda src, tgt: (tf.concat(([src_sos_id], src,), 0),
+                        tf.concat((src, [src_eos_id]), 0),
                         tf.concat(([tgt_sos_id], tgt), 0),
                         tf.concat((tgt, [tgt_eos_id]), 0)),
       num_parallel_calls=num_parallel_calls).prefetch(output_buffer_size)
   # Add in sequence lengths.
   src_tgt_dataset = src_tgt_dataset.map(
-      lambda src, tgt_in, tgt_out: (
-          src, tgt_in, tgt_out, tf.size(src), tf.size(tgt_in)),
+      lambda src_in, src_out, tgt_in, tgt_out: (
+          src_in, src_out, tgt_in, tgt_out, tf.size(src_in), tf.size(tgt_in)),
       num_parallel_calls=num_parallel_calls).prefetch(output_buffer_size)
 
   # Bucket by source sequence length (buckets for lengths 0-9, 10-19, ...)
@@ -151,6 +154,7 @@ def get_iterator(src_dataset,
         # the source and target row sizes; these are scalars.
         padded_shapes=(
             tf.TensorShape([None]),  # src
+            tf.TensorShape([None]),  # src_output
             tf.TensorShape([None]),  # tgt_input
             tf.TensorShape([None]),  # tgt_output
             tf.TensorShape([]),  # src_len
@@ -160,6 +164,7 @@ def get_iterator(src_dataset,
         # later on we will be masking out calculations past the true sequence.
         padding_values=(
             src_eos_id,  # src
+            src_eos_id,  # src_output
             tgt_eos_id,  # tgt_input
             tgt_eos_id,  # tgt_output
             0,  # src_len -- unused
@@ -167,7 +172,7 @@ def get_iterator(src_dataset,
 
   if num_buckets > 1:
 
-    def key_func(unused_1, unused_2, unused_3, src_len, tgt_len):
+    def key_func(unused_1, unused_2, unused_3, unused_4, src_len, tgt_len):
       # Calculate bucket_width by maximum source sequence length.
       # Pairs with length [0, bucket_width) go to bucket 0, length
       # [bucket_width, 2 * bucket_width) go to bucket 1, etc.  Pairs with length
@@ -192,11 +197,12 @@ def get_iterator(src_dataset,
   else:
     batched_dataset = batching_func(src_tgt_dataset)
   batched_iter = batched_dataset.make_initializable_iterator()
-  (src_ids, tgt_input_ids, tgt_output_ids, src_seq_len,
+  (src_ids, src_output_ids, tgt_input_ids, tgt_output_ids, src_seq_len,
    tgt_seq_len) = (batched_iter.get_next())
   return BatchedInput(
       initializer=batched_iter.initializer,
       source=src_ids,
+      source_output=src_output_ids,
       target_input=tgt_input_ids,
       target_output=tgt_output_ids,
       source_sequence_length=src_seq_len,

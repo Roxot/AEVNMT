@@ -21,6 +21,9 @@ import time
 
 import tensorflow as tf
 
+import nmt.djoint as djoint
+
+from .baseline import BaselineModel
 from . import attention_model
 from . import gnmt_model
 from . import model as nmt_model
@@ -93,6 +96,12 @@ def inference(ckpt,
 
   if not hparams.attention:
     model_creator = nmt_model.Model
+  elif hparams.joint_model_type == "baseline":
+    model_creator = BaselineModel
+  elif hparams.joint_model_type == "dsimple":
+    model_creator = djoint.SimpleJoint
+  elif hparams.joint_model_type is not None:
+    raise ValueError("Unknown joint model type: %s" % hparams.joint_model_type)
   elif hparams.attention_architecture == "standard":
     model_creator = attention_model.AttentionModel
   elif hparams.attention_architecture in ["gnmt", "gnmt_v2"]:

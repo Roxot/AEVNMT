@@ -40,6 +40,14 @@ def add_arguments(parser):
   """Build ArgumentParser."""
   parser.register("type", "bool", lambda v: v.lower() == "true")
 
+  # joint nmt parameters
+  parser.add_argument("--joint_model_type", type=str, default=None,
+                      help="If set use the specified joint model:"
+                      " baseline|dsimple")
+  parser.add_argument("--num_lm_layers", type=int, default=None,
+                      help="Language model depth,"
+                      " equal to num_decoder_layers if None.")
+
   # network
   parser.add_argument("--num_units", type=int, default=32, help="Network size.")
   parser.add_argument("--num_layers", type=int, default=2,
@@ -290,6 +298,11 @@ def add_arguments(parser):
 def create_hparams(flags):
   """Create training hparams."""
   return tf.contrib.training.HParams(
+      # Joint model parameters
+      joint_model_type=flags.joint_model_type,
+      num_lm_layers=(flags.num_lm_layers or flags.num_decoder_layers or \
+          flags.num_layers),
+
       # Data
       src=flags.src,
       tgt=flags.tgt,

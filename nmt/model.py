@@ -60,8 +60,7 @@ class BaseModel(object):
       extra_args: model_helper.ExtraArgs, for passing customizable functions.
 
     """
-    assert isinstance(iterator, iterator_utils.BatchedInput)
-    self.iterator = iterator
+    self.supports_monolingual = False
     self.mode = mode
     self.src_vocab_table = source_vocab_table
     self.tgt_vocab_table = target_vocab_table
@@ -97,7 +96,9 @@ class BaseModel(object):
 
     # Embeddings
     self.init_embeddings(hparams, scope)
-    self.batch_size = tf.size(self.iterator.source_sequence_length)
+
+    assert isinstance(iterator, iterator_utils.BatchedInput)
+    self._parse_iterator(iterator, hparams)
 
     # Projection
     with tf.variable_scope(scope or "build_network"):
@@ -111,8 +112,8 @@ class BaseModel(object):
     if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
       self.train_loss = res[1]
       self.word_count = tf.reduce_sum(
-          self.iterator.source_sequence_length) + tf.reduce_sum(
-              self.iterator.target_sequence_length)
+          self.source_sequence_length) + tf.reduce_sum(
+              self.target_sequence_length)
     elif self.mode == tf.contrib.learn.ModeKeys.EVAL:
       self.eval_loss = res[1]
     elif self.mode == tf.contrib.learn.ModeKeys.INFER:
@@ -123,7 +124,7 @@ class BaseModel(object):
     if self.mode != tf.contrib.learn.ModeKeys.INFER:
       ## Count the number of predicted words for compute ppl.
       self.predict_count = tf.reduce_sum(
-          self.iterator.target_sequence_length)
+          self.target_sequence_length)
 
     self.global_step = tf.Variable(0, trainable=False)
     params = tf.trainable_variables()
@@ -175,6 +176,18 @@ class BaseModel(object):
     for param in params:
       utils.print_out("  %s, %s, %s" % (param.name, str(param.get_shape()),
                                         param.op.device))
+
+  def _parse_iterator(self, iterator, hparams):
+    self.source = iterator.source
+    self.source_sequence_length = iterator.source_sequence_length
+    self.source_output = iterator.source_output
+    self.target_input = iterator.target_input
+    self.target_output = iterator.target_output
+    self.target_sequence_length = iterator.target_sequence_length
+    self.batch_size = tf.size(self.source_sequence_length)
+    self.initializer = iterator.initializer
+    self.mono_initializer = iterator.mono_initializer
+    self.mono_batch = iterator.mono_batch
 
   def _get_learning_rate_warmup(self, hparams):
     """Get learning rate warmup."""
@@ -253,7 +266,7 @@ class BaseModel(object):
             tgt_embed_file=hparams.tgt_embed_file,
             scope=scope,))
 
-  def train(self, sess):
+  def train(self, sess, feed_dict={}):
     assert self.mode == tf.contrib.learn.ModeKeys.TRAIN
     return sess.run([self.update,
                      self.train_loss,
@@ -263,7 +276,7 @@ class BaseModel(object):
                      self.word_count,
                      self.batch_size,
                      self.grad_norm,
-                     self.learning_rate])
+                     self.learning_rate], feed_dict=feed_dict)
 
   def eval(self, sess):
     assert self.mode == tf.contrib.learn.ModeKeys.EVAL
@@ -371,22 +384,21 @@ class BaseModel(object):
                          tf.int32)
     tgt_eos_id = tf.cast(self.tgt_vocab_table.lookup(tf.constant(hparams.eos)),
                          tf.int32)
-    iterator = self.iterator
 
     # maximum_iteration: The maximum decoding steps.
     maximum_iterations = self._get_infer_maximum_iterations(
-        hparams, iterator.source_sequence_length)
+        hparams, self.source_sequence_length)
 
     ## Decoder.
     with tf.variable_scope("decoder") as decoder_scope:
       cell, decoder_initial_state = self._build_decoder_cell(
           hparams, encoder_outputs, encoder_state,
-          iterator.source_sequence_length)
+          self.source_sequence_length)
 
       ## Train or eval
       if self.mode != tf.contrib.learn.ModeKeys.INFER:
         # decoder_emp_inp: [max_time, batch_size, num_units]
-        target_input = iterator.target_input
+        target_input = self.target_input
         if self.time_major:
           target_input = tf.transpose(target_input)
         decoder_emb_inp = tf.nn.embedding_lookup(
@@ -394,7 +406,7 @@ class BaseModel(object):
 
         # Helper
         helper = tf.contrib.seq2seq.TrainingHelper(
-            decoder_emb_inp, iterator.target_sequence_length,
+            decoder_emb_inp, self.target_sequence_length,
             time_major=self.time_major)
 
         # Decoder
@@ -497,14 +509,14 @@ class BaseModel(object):
 
   def _compute_loss(self, logits):
     """Compute optimization loss."""
-    target_output = self.iterator.target_output
+    target_output = self.target_output
     if self.time_major:
       target_output = tf.transpose(target_output)
     max_time = self.get_max_time(target_output)
     crossent = tf.nn.sparse_softmax_cross_entropy_with_logits(
         labels=target_output, logits=logits)
     target_weights = tf.sequence_mask(
-        self.iterator.target_sequence_length, max_time, dtype=logits.dtype)
+        self.target_sequence_length, max_time, dtype=logits.dtype)
     if self.time_major:
       target_weights = tf.transpose(target_weights)
 
@@ -554,9 +566,8 @@ class Model(BaseModel):
     """Build an encoder."""
     num_layers = self.num_encoder_layers
     num_residual_layers = self.num_encoder_residual_layers
-    iterator = self.iterator
 
-    source = iterator.source
+    source = self.source
     if self.time_major:
       source = tf.transpose(source)
 
@@ -577,7 +588,7 @@ class Model(BaseModel):
             cell,
             encoder_emb_inp,
             dtype=dtype,
-            sequence_length=iterator.source_sequence_length,
+            sequence_length=self.source_sequence_length,
             time_major=self.time_major,
             swap_memory=True)
       elif hparams.encoder_type == "bi":
@@ -589,7 +600,7 @@ class Model(BaseModel):
         encoder_outputs, bi_encoder_state = (
             self._build_bidirectional_rnn(
                 inputs=encoder_emb_inp,
-                sequence_length=iterator.source_sequence_length,
+                sequence_length=self.source_sequence_length,
                 dtype=dtype,
                 hparams=hparams,
                 num_bi_layers=num_bi_layers,

@@ -35,6 +35,7 @@ utils.check_tensorflow_version()
 
 FLAGS = None
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 def add_arguments(parser):
   """Build ArgumentParser."""
@@ -47,6 +48,8 @@ def add_arguments(parser):
   parser.add_argument("--num_lm_layers", type=int, default=None,
                       help="Language model depth,"
                       " equal to num_decoder_layers if None.")
+  parser.add_argument("--mono_prefix", type=str, default=None,
+                      help="Monolingual data prefix.")
 
   # network
   parser.add_argument("--num_units", type=int, default=32, help="Network size.")
@@ -302,6 +305,7 @@ def create_hparams(flags):
       joint_model_type=flags.joint_model_type,
       num_lm_layers=(flags.num_lm_layers or flags.num_decoder_layers or \
           flags.num_layers),
+      mono_prefix=flags.mono_prefix,
 
       # Data
       src=flags.src,

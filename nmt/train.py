@@ -225,10 +225,9 @@ def print_step_info(prefix, global_step, info, result_summary, log_f):
   utils.print_out(
       "%sstep %d lr %g step-time %.2fs wps %.2fK ppl %.2f gN %.2f %s, %s" %
       (prefix, global_step, info["learning_rate"], info["avg_step_time"],
-       info["speed"], info["train_ppl"], info["avg_grad_norm"], result_summary,
-       time.ctime()),
+       info["speed"], info["train_ppl"], info["avg_grad_norm"],
+       result_summary, time.ctime()),
       log_f)
-
 
 def process_stats(stats, info, global_step, steps_per_stats, log_f):
   """Update info and check for overflow."""
@@ -264,8 +263,11 @@ def before_train(loaded_train_model, train_model, train_sess, global_step,
   # Initialize all of the iterators
   skip_count = hparams.batch_size * hparams.epoch_step
   utils.print_out("# Init train iterator, skipping %d elements" % skip_count)
+  initializers = [train_model.iterator.initializer]
+  if train_model.iterator.mono_initializer:
+    initializers.append(train_model.iterator.mono_initializer)
   train_sess.run(
-      train_model.iterator.initializer,
+      initializers,
       feed_dict={train_model.skip_count_placeholder: skip_count})
 
   return stats, info, start_train_time
@@ -350,6 +352,10 @@ def train(hparams, scope=None, target_session=""):
   last_stats_step = global_step
   last_eval_step = global_step
   last_external_eval_step = global_step
+  monolingual_batch = False
+  num_bilingual_batches = 0
+  num_monolingual_batches = 0
+  train_feed_dict = {}
 
   # This is the training loop.
   stats, info, start_train_time = before_train(
@@ -358,9 +364,25 @@ def train(hparams, scope=None, target_session=""):
     ### Run a step ###
     start_time = time.time()
     try:
-      step_result = loaded_train_model.train(train_sess)
+
+      train_feed_dict[loaded_train_model.mono_batch] = monolingual_batch
+      step_result = loaded_train_model.train(train_sess, feed_dict=train_feed_dict)
       hparams.epoch_step += 1
+      num_monolingual_batches += 1 if monolingual_batch else 0
+      num_bilingual_batches += 1 if not monolingual_batch else 0
+
+      # Switch between bilingual and monolingual batches if monolingual data
+      # is given.
+      if hparams.mono_prefix:
+        monolingual_batch = not monolingual_batch
     except tf.errors.OutOfRangeError:
+
+      # Don't go to the next epoch if the monolingual iterator is
+      # fully consumed, simply reset it and continue.
+      if monolingual_batch:
+        train_sess.run(train_model.iterator.mono_initializer)
+        continue
+
       # Finished going through the training dataset.  Go to next epoch.
       hparams.epoch_step = 0
       utils.print_out(
@@ -378,6 +400,12 @@ def train(hparams, scope=None, target_session=""):
       train_sess.run(
           train_model.iterator.initializer,
           feed_dict={train_model.skip_count_placeholder: 0})
+
+      utils.print_out("  Processed %d bilingual batches"
+                      " and %d monolingual batches." % \
+                      (num_bilingual_batches, num_monolingual_batches))
+      num_monolingual_batches = 0
+      num_bilingual_batches = 0
       continue
 
     # Process step_result, accumulate stats, and write summary

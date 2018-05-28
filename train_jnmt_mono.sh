@@ -22,6 +22,7 @@ python -m nmt.nmt \
     --vocab_prefix=../data/${SRC}-${TGT}/vocab \
     --train_prefix=../data/${SRC}-${TGT}/training \
     --dev_prefix=../data/${SRC}-${TGT}/dev \
+    --mono_prefix=../data/${SRC}-${TGT}/mono \
     --hparams_path=${HPARAMS} \
     # &> ${OUTPUT_DIR}/log &
 

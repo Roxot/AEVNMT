@@ -83,6 +83,17 @@ def create_train_model(
     tgt_dataset = tf.data.TextLineDataset(tgt_file)
     skip_count_placeholder = tf.placeholder(shape=(), dtype=tf.int64)
 
+    mono_datasets = None
+    if hparams.mono_prefix is not None:
+      mono_batch = tf.placeholder(tf.bool, name="mono_batch_placeholder")
+      mono_file_txt = "%s.%s.txt" % (hparams.mono_prefix, hparams.tgt)
+      mono_file_len = "%s.%s.len" % (hparams.mono_prefix, hparams.tgt)
+      mono_txt_dataset = tf.data.TextLineDataset(mono_file_txt)
+      pred_src_len_dataset = tf.data.TextLineDataset(mono_file_len)
+      mono_datasets = (mono_txt_dataset, pred_src_len_dataset)
+    else:
+      mono_batch = tf.constant(False)
+
     iterator = iterator_utils.get_iterator(
         src_dataset,
         tgt_dataset,
@@ -97,7 +108,9 @@ def create_train_model(
         tgt_max_len=hparams.tgt_max_len,
         skip_count=skip_count_placeholder,
         num_shards=num_workers,
-        shard_index=jobid)
+        shard_index=jobid,
+        mono_datasets=mono_datasets,
+        mono_batch=mono_batch)
 
     # Note: One can set model_device_fn to
     # `tf.train.replica_device_setter(ps_tasks)` for distributed training.
@@ -112,6 +125,11 @@ def create_train_model(
           target_vocab_table=tgt_vocab_table,
           scope=scope,
           extra_args=extra_args)
+      if hparams.mono_prefix:
+        print(model.supports_monolingual)
+        print(model)
+        print(hparams.mono_prefix)
+        assert model.supports_monolingual
 
   return TrainModel(
       graph=graph,
@@ -151,7 +169,8 @@ def create_eval_model(model_creator, hparams, scope=None, extra_args=None):
         random_seed=hparams.random_seed,
         num_buckets=hparams.num_buckets,
         src_max_len=hparams.src_max_len_infer,
-        tgt_max_len=hparams.tgt_max_len_infer)
+        tgt_max_len=hparams.tgt_max_len_infer,
+        mono_batch=tf.constant(False))
     model = model_creator(
         hparams,
         iterator=iterator,

@@ -27,9 +27,52 @@ class BatchedInput(
     collections.namedtuple("BatchedInput",
                            ("initializer", "source", "source_output", "target_input",
                             "target_output", "source_sequence_length",
-                            "target_sequence_length"))):
+                            "target_sequence_length", "mono_initializer",
+                            "mono_text_input", "mono_text_output",
+                            "mono_text_length", "predicted_source_length",
+                            "mono_batch"))):
   pass
 
+def get_mono_iterator(mono_txt_dataset, mono_len_dataset, vocab, sos_id,  eos_id,
+      output_buffer_size, batch_size, random_seed=None, num_threads=4):
+  mono_dataset = tf.data.Dataset.zip((mono_txt_dataset, mono_len_dataset))
+  mono_dataset = mono_dataset.shuffle(output_buffer_size, random_seed)
+
+  mono_dataset = mono_dataset.map(
+      lambda txt, pred_src_len: (
+          tf.string_split([txt]).values, pred_src_len),
+      num_parallel_calls=num_threads)
+
+  # Convert to word ids.
+  mono_dataset = mono_dataset.map(
+      lambda txt, pred_src_len: (tf.cast(vocab.lookup(txt), tf.int32),
+      tf.string_to_number(pred_src_len, out_type=tf.int32)),
+      num_parallel_calls=num_threads)
+
+  # Create an input and an output for the decoder
+  mono_dataset = mono_dataset.map(
+      lambda txt, pred_src_len: (tf.concat(([sos_id], txt), 0), # txt_in
+                        tf.concat((txt, [eos_id]), 0),          # txt_out
+                        pred_src_len),                          # pred_src_len
+      num_parallel_calls=num_threads)
+
+  # Add the text length to the dataset.
+  mono_dataset = mono_dataset.map(
+      lambda txt_in, txt_out, pred_src_len: (txt_in, txt_out,
+      tf.size(txt_in), pred_src_len),
+      num_parallel_calls=num_threads)
+
+  batched_mono_dataset = mono_dataset.padded_batch(
+      batch_size,
+      padded_shapes=(tf.TensorShape([None]),  # monolingual_text_in
+                     tf.TensorShape([None]),  # monolingual_text_out
+                     tf.TensorShape([]),      # monolingual_text_length
+                     tf.TensorShape([])),     # monolingual_src_length_prediction
+      padding_values=(eos_id,                 # monolingual_text_in
+                      eos_id,                 # mono_lingual_text_out
+                      0,                      # monolingual_text_length -- unused
+                      0))                     # monolingual_src_length_prediction -- unused
+  return batched_mono_dataset.make_initializable_iterator()
 
 def get_infer_iterator(src_dataset,
                        src_vocab_table,
@@ -73,8 +116,13 @@ def get_infer_iterator(src_dataset,
       target_input=None,
       target_output=None,
       source_sequence_length=src_seq_len,
-      target_sequence_length=None)
-
+      target_sequence_length=None,
+      mono_initializer=None,
+      mono_text_input=None,
+      mono_text_output=None,
+      mono_text_length=None,
+      predicted_source_length=None,
+      mono_batch=tf.constant(False))
 
 def get_iterator(src_dataset,
                  tgt_dataset,
@@ -92,7 +140,9 @@ def get_iterator(src_dataset,
                  skip_count=None,
                  num_shards=1,
                  shard_index=0,
-                 reshuffle_each_iteration=True):
+                 reshuffle_each_iteration=True,
+                 mono_datasets=None,
+                 mono_batch=tf.constant(False)):
   if not output_buffer_size:
     output_buffer_size = batch_size * 1000
   src_eos_id = tf.cast(src_vocab_table.lookup(tf.constant(eos)), tf.int32)
@@ -196,14 +246,53 @@ def get_iterator(src_dataset,
 
   else:
     batched_dataset = batching_func(src_tgt_dataset)
-  batched_iter = batched_dataset.make_initializable_iterator()
-  (src_ids, src_output_ids, tgt_input_ids, tgt_output_ids, src_seq_len,
-   tgt_seq_len) = (batched_iter.get_next())
+  bilingual_iterator = batched_dataset.make_initializable_iterator()
+
+  # Load monolingual data if given.
+  if mono_datasets:
+    mono_iterator = get_mono_iterator(mono_datasets[0], mono_datasets[1],
+        tgt_vocab_table, tgt_sos_id, tgt_eos_id, output_buffer_size, batch_size,
+        random_seed=random_seed, num_threads=num_parallel_calls)
+    # During bilingual batches give a batch of zeros for monolingual data.
+    mono_text_input, mono_text_output, mono_text_length, \
+        predicted_source_length = tf.cond(
+            mono_batch,
+            lambda: mono_iterator.get_next(),
+            lambda: (tf.zeros([batch_size, 1], dtype=tf.int32), # mono_txt_input
+                     tf.zeros([batch_size, 1], dtype=tf.int32), # mono_txt_output
+                     tf.zeros([batch_size], dtype=tf.int32),    # mono_txt_len
+                     tf.zeros([batch_size], dtype=tf.int32)))   # pred_src_len
+    mono_initializer = mono_iterator.initializer
+  else:
+    mono_text_input, mono_text_output, mono_text_length, predicted_source_length = \
+        (tf.zeros([batch_size, 1], dtype=tf.int32), # mono_txt_input
+         tf.zeros([batch_size, 1], dtype=tf.int32), # mono_txt_output
+         tf.zeros([batch_size], dtype=tf.int32),    # mono_txt_len
+         tf.zeros([batch_size], dtype=tf.int32))   # pred_src_len
+    mono_initializer = None
+
+  # If a monolingual batch, just give a batch of zeros for the bilingual data.
+  (src_input_ids, src_output_ids, tgt_input_ids, tgt_output_ids, \
+      src_seq_len, tgt_seq_len) = tf.cond(mono_batch,
+          lambda: (tf.zeros([batch_size, 1], dtype=tf.int32), # src
+                   tf.zeros([batch_size, 1], dtype=tf.int32), # src_output
+                   tf.zeros([batch_size, 1], dtype=tf.int32), # tgt_input
+                   tf.zeros([batch_size, 1], dtype=tf.int32), # tgt_output
+                   tf.zeros([batch_size], dtype=tf.int32),    # src_len
+                   tf.zeros([batch_size], dtype=tf.int32)),   # tgt_len
+          lambda: bilingual_iterator.get_next())
+
   return BatchedInput(
-      initializer=batched_iter.initializer,
-      source=src_ids,
+      initializer=bilingual_iterator.initializer,
+      source=src_input_ids,
       source_output=src_output_ids,
       target_input=tgt_input_ids,
       target_output=tgt_output_ids,
       source_sequence_length=src_seq_len,
-      target_sequence_length=tgt_seq_len)
+      target_sequence_length=tgt_seq_len,
+      mono_initializer=mono_initializer,
+      mono_text_input=mono_text_input,
+      mono_text_output=mono_text_output,
+      mono_text_length=mono_text_length,
+      predicted_source_length=predicted_source_length,
+      mono_batch=mono_batch)

@@ -50,6 +50,10 @@ def add_arguments(parser):
                       " equal to num_decoder_layers if None.")
   parser.add_argument("--mono_prefix", type=str, default=None,
                       help="Monolingual data prefix.")
+  parser.add_argument("--Qx_encoder", type=str, default="positional",
+                      help="Source inference model encoder type: positional|birnn")
+  parser.add_argument("--Qx_decoder", type=str, default="diagonal",
+                      help="Source inference model decoder type: diagonal|rnn")
 
   # network
   parser.add_argument("--num_units", type=int, default=32, help="Network size.")
@@ -306,6 +310,8 @@ def create_hparams(flags):
       num_lm_layers=(flags.num_lm_layers or flags.num_decoder_layers or \
           flags.num_layers),
       mono_prefix=flags.mono_prefix,
+      Qx_encoder=flags.Qx_encoder,
+      Qx_decoder=flags.Qx_decoder,
 
       # Data
       src=flags.src,

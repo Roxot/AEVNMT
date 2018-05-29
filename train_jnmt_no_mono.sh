@@ -23,7 +23,7 @@ python -m nmt.nmt \
     --train_prefix=../data/${SRC}-${TGT}/training \
     --dev_prefix=../data/${SRC}-${TGT}/dev \
     --hparams_path=${HPARAMS} \
-    # &> ${OUTPUT_DIR}/log &
+    &> ${OUTPUT_DIR}/log &
 
 echo "Using config: ${HPARAMS}"
 echo "You can check the logfile using:"

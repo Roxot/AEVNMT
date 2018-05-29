@@ -126,9 +126,6 @@ def create_train_model(
           scope=scope,
           extra_args=extra_args)
       if hparams.mono_prefix:
-        print(model.supports_monolingual)
-        print(model)
-        print(hparams.mono_prefix)
         assert model.supports_monolingual
 
   return TrainModel(

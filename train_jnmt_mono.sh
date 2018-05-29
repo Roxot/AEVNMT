@@ -5,7 +5,7 @@ TGT=$2
 CONFIG=$3
 
 TIMESTAMP=`date +%s`
-OUTPUT_DIR="../experiments/jnmt_${CONFIG}_${SRC}-${TGT}_${TIMESTAMP}"
+OUTPUT_DIR="../experiments/jnmt_mono_${CONFIG}_${SRC}-${TGT}_${TIMESTAMP}"
 mkdir -p ${OUTPUT_DIR}
 
 HPARAMS="./nmt/standard_hparams/jnmt/${CONFIG}.json"
@@ -24,7 +24,7 @@ python -m nmt.nmt \
     --dev_prefix=../data/${SRC}-${TGT}/dev \
     --mono_prefix=../data/${SRC}-${TGT}/mono \
     --hparams_path=${HPARAMS} \
-    # &> ${OUTPUT_DIR}/log &
+    &> ${OUTPUT_DIR}/log &
 
 echo "Using config: ${HPARAMS}"
 echo "You can check the logfile using:"

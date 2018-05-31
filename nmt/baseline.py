@@ -19,6 +19,9 @@ class BaselineModel(AttentionModel):
     assert hparams.encoder_type == "bi"
     assert hparams.num_encoder_layers == 2
 
+    # For use for numerical stability.
+    self.epsilon = 1e-10
+
     super(BaselineModel, self).__init__(hparams=hparams, mode=mode,
         iterator=iterator, source_vocab_table=source_vocab_table,
         target_vocab_table=target_vocab_table,

@@ -378,6 +378,26 @@ class SimpleJointModel(BaselineModel):
         categorical_loss * mask) / tf.to_float(self.batch_size)
     return avg_loss
 
+  # Computes the entropy of a sequence of categorical variables
+  # as the sum of their individual entropies.
+  def _compute_categorical_entropy(self, probabilities, sequence_mask):
+    entropy = -tf.reduce_sum(probabilities * tf.log(probabilities + self.epsilon),
+        axis=-1)
+    entropy = tf.reduce_sum(sequence_mask * entropy) / tf.to_float(self.batch_size)
+    return entropy
+
+  # A mathematically unjustified heuristic that assumes X is Categorical,
+  # even though it is a dense Concrete variable. Splits up the KL in
+  # a categorical cross-entropy and a categorical entropy.
+  def _KL_heuristic(self, lm_logits):
+    lm_loss = self._compute_dense_categorical_loss(lm_logits,
+        self.source_output, self.source_sequence_length)
+    max_source_time = self.get_max_time(lm_logits)
+    source_weights = tf.sequence_mask(self.source_sequence_length,
+        max_source_time, dtype=lm_logits.dtype)
+    entropy = self._compute_categorical_entropy(self.source, source_weights)
+    return lm_loss - entropy
+
   # Overrides model._compute_loss
   def _compute_loss(self, tm_logits, lm_logits):
     tm_loss = self._compute_categorical_loss(tm_logits,
@@ -387,6 +407,6 @@ class SimpleJointModel(BaselineModel):
         lambda: self._compute_dense_categorical_loss(lm_logits, self.source_output,
                                                      self.source_sequence_length))
     KL = tf.cond(self.mono_batch,
-        lambda: tf.constant(0.), # TODO
+        lambda: self._KL_heuristic(lm_logits),
         lambda: tf.constant(0.))
     return tm_loss + lm_loss + KL

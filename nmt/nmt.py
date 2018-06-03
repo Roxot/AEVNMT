@@ -44,7 +44,7 @@ def add_arguments(parser):
   # joint nmt parameters
   parser.add_argument("--joint_model_type", type=str, default=None,
                       help="If set use the specified joint model:"
-                      " baseline|dsimple")
+                      " baseline|dsimple|dvae")
   parser.add_argument("--num_lm_layers", type=int, default=None,
                       help="Language model depth,"
                       " equal to num_decoder_layers if None.")
@@ -54,6 +54,7 @@ def add_arguments(parser):
                       help="Source inference model encoder type: positional|birnn")
   parser.add_argument("--Qx_decoder", type=str, default="diagonal",
                       help="Source inference model decoder type: diagonal|rnn")
+  parser.add_argument("--z_dim", type=str, default=32, help="Dimensionality of z")
 
   # network
   parser.add_argument("--num_units", type=int, default=32, help="Network size.")
@@ -312,6 +313,7 @@ def create_hparams(flags):
       mono_prefix=flags.mono_prefix,
       Qx_encoder=flags.Qx_encoder,
       Qx_decoder=flags.Qx_decoder,
+      z_dim=flags.z_dim,
 
       # Data
       src=flags.src,

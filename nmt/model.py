@@ -98,7 +98,7 @@ class BaseModel(object):
     self.init_embeddings(hparams, scope)
 
     assert isinstance(iterator, iterator_utils.BatchedInput)
-    self._parse_iterator(iterator, hparams)
+    self._parse_iterator(iterator, hparams, scope=scope)
 
     # Projection
     with tf.variable_scope(scope or "build_network"):
@@ -177,7 +177,7 @@ class BaseModel(object):
       utils.print_out("  %s, %s, %s" % (param.name, str(param.get_shape()),
                                         param.op.device))
 
-  def _parse_iterator(self, iterator, hparams):
+  def _parse_iterator(self, iterator, hparams, scope=None):
     self.source = iterator.source
     self.source_sequence_length = iterator.source_sequence_length
     self.source_output = iterator.source_output

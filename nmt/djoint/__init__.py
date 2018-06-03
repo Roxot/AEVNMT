@@ -3,3 +3,4 @@
 """
 
 from .simplejoint import SimpleJointModel
+from .vaejoint import VAEJointModel

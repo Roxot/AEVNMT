@@ -293,6 +293,8 @@ def train(hparams, scope=None, target_session=""):
       model_creator = BaselineModel
     elif hparams.joint_model_type == "dsimple":
       model_creator = djoint.SimpleJointModel
+    elif hparams.joint_model_type == "dvae":
+      model_creator = djoint.VAEJointModel
     elif hparams.joint_model_type is not None:
       raise ValueError("Unknown joint model type: %s" % hparams.joint_model_type)
     elif (hparams.encoder_type == "gnmt" or
@@ -584,12 +586,12 @@ def _external_eval(model, global_step, sess, hparams, iterator,
 
   sess.run(iterator.initializer, feed_dict=iterator_feed_dict)
 
-  output = os.path.join(out_dir, "output_%s" % label)
+  output_step = os.path.join(out_dir, "output_%s_%08d" % (label, global_step))
   scores = nmt_utils.decode_and_evaluate(
       label,
       model,
       sess,
-      output,
+      output_step,
       ref_file=tgt_file,
       metrics=hparams.metrics,
       subword_option=hparams.subword_option,

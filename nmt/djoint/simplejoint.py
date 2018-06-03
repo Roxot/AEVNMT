@@ -30,32 +30,35 @@ class SimpleJointModel(BaselineModel):
 
   # Overrides Model._parse_iterator
   # Parses the data iterator and sets instance variables correctly.
-  def _parse_iterator(self, iterator, hparams):
-    if self.mode == tf.contrib.learn.ModeKeys.INFER:
-      super(SimpleJointModel, self)._parse_iterator(iterator, hparams)
-      self.source = tf.one_hot(self.source, self.src_vocab_size, dtype=tf.float32)
-      return
+  def _parse_iterator(self, iterator, hparams, scope=None):
+    dtype = tf.float32
+    with tf.variable_scope(scope or "dynamic_seq2seq", dtype=dtype):
 
-    self.initializer = iterator.initializer
-    self.mono_initializer = iterator.mono_initializer
-    self.mono_batch = iterator.mono_batch
+      if self.mode == tf.contrib.learn.ModeKeys.INFER:
+        super(SimpleJointModel, self)._parse_iterator(iterator, hparams)
+        self.source = tf.one_hot(self.source, self.src_vocab_size, dtype=tf.float32)
+        return
 
-    # Change the data depending on what type of batch we're training on.
-    self.target_input, self.target_output, self.target_sequence_length = tf.cond(
-        self.mono_batch,
-        lambda: (iterator.mono_text_input, iterator.mono_text_output,
-                 iterator.mono_text_length),
-        lambda: (iterator.target_input, iterator.target_output,
-                 iterator.target_sequence_length)) 
-    self.batch_size = tf.size(self.target_sequence_length)
+      self.initializer = iterator.initializer
+      self.mono_initializer = iterator.mono_initializer
+      self.mono_batch = iterator.mono_batch
 
-    self.source, self.source_output, self.source_sequence_length = tf.cond(
-        self.mono_batch,
-        lambda: self._infer_source(iterator, hparams),
-        lambda: (tf.one_hot(iterator.source, self.src_vocab_size, dtype=tf.float32),
-                 tf.one_hot(iterator.source_output, self.src_vocab_size,
-                            dtype=tf.float32),
-                 iterator.source_sequence_length))
+      # Change the data depending on what type of batch we're training on.
+      self.target_input, self.target_output, self.target_sequence_length = tf.cond(
+          self.mono_batch,
+          lambda: (iterator.mono_text_input, iterator.mono_text_output,
+                   iterator.mono_text_length),
+          lambda: (iterator.target_input, iterator.target_output,
+                   iterator.target_sequence_length)) 
+      self.batch_size = tf.size(self.target_sequence_length)
+
+      self.source, self.source_output, self.source_sequence_length = tf.cond(
+          self.mono_batch,
+          lambda: self._infer_source(iterator, hparams),
+          lambda: (tf.one_hot(iterator.source, self.src_vocab_size, dtype=tf.float32),
+                   tf.one_hot(iterator.source_output, self.src_vocab_size,
+                              dtype=tf.float32),
+                   iterator.source_sequence_length))
 
   # Overrides model.build_graph
   def build_graph(self, hparams, scope=None):
@@ -90,7 +93,7 @@ class SimpleJointModel(BaselineModel):
   def _source_embedding(self, source):
     return tf.tensordot(source, self.embedding_encoder, axes=[[2], [0]])
 
-  def _build_language_model(self, hparams):
+  def _build_language_model(self, hparams, z_sample=None):
     source = self.source
     if self.time_major:
       source = self._transpose_time_major(source)
@@ -108,9 +111,17 @@ class SimpleJointModel(BaselineModel):
           mode=self.mode,
           single_cell_fn=self.single_cell_fn)
 
-      # Use a zero initial state and the embeddings as inputs.
+      # Use embeddings as inputs.
       embeddings = self._source_embedding(source)
-      init_state = cell.zero_state(self.batch_size, scope.dtype)
+
+      # Use a zero initial state or tanh(Wz) if provided (VAEJointModel).
+      if z_sample is not None:
+        utils.print_out("  initializing generative LM with tanh(Wz)")
+        init_state_val = tf.tanh(tf.layers.dense(z_sample, hparams.num_units))
+        init_state = self._make_initial_state(init_state_val, hparams.unit_type)
+      else:
+        utils.print_out("  initializing generative LM with zeros.")
+        init_state = cell.zero_state(self.batch_size, scope.dtype)
 
       # Run the LSTM language model.
       helper = tf.contrib.seq2seq.TrainingHelper(
@@ -135,7 +146,7 @@ class SimpleJointModel(BaselineModel):
 
     return logits
 
-  def _positional_encoder(self, target, target_length, predicted_source_length, hparams):
+  def _positional_encoder(self, target, target_length, hparams):
       # Embed the target sentence with the decoder embedding matrix.
       # We use the generative embedding matrix, but stop gradients from
       # flowing through.
@@ -158,7 +169,7 @@ class SimpleJointModel(BaselineModel):
 
       return encoder_outputs
 
-  def _birnn_encoder(self, target, target_length, predicted_source_length, hparams):
+  def _birnn_encoder(self, target, target_length, hparams):
     scope = tf.get_variable_scope()
     dtype = scope.dtype
     num_layers = self.num_encoder_layers
@@ -276,66 +287,67 @@ class SimpleJointModel(BaselineModel):
 
   # Infers the source sentence from target data.
   def _infer_source(self, iterator, hparams):
-    predicted_source_length = iterator.predicted_source_length
-    target = iterator.mono_text_input
-    target_length = iterator.mono_text_length
+    with tf.variable_scope("source_inference_model"):
+      predicted_source_length = iterator.predicted_source_length
+      target = iterator.mono_text_input
+      target_length = iterator.mono_text_length
 
-    # Limit the length of the source sentences.
-    max_length = tf.fill(tf.shape(predicted_source_length), hparams.src_max_len)
-    predicted_source_length = tf.minimum(predicted_source_length, max_length)
+      # Limit the length of the source sentences.
+      max_length = tf.fill(tf.shape(predicted_source_length), hparams.src_max_len)
+      predicted_source_length = tf.minimum(predicted_source_length, max_length)
 
-    # Encode the target sentence.
-    with tf.variable_scope("source_inference_encoder") as scope:
-      if hparams.Qx_encoder == "positional":
-        encoder_outputs = self._positional_encoder(target, target_length,
-            predicted_source_length, hparams)
-        encoder_state = None
-      elif hparams.Qx_encoder == "birnn":
-        encoder_outputs, encoder_state = self._birnn_encoder(target,
-            target_length, predicted_source_length, hparams)
-      else:
-        raise ValueError("Unknown Qx_encoder type: %s" % hparams.Qx_encoder)
+      # Encode the target sentence.
+      with tf.variable_scope("encoder") as scope:
+        if hparams.Qx_encoder == "positional":
+          encoder_outputs = self._positional_encoder(target, target_length,
+              hparams)
+          encoder_state = None
+        elif hparams.Qx_encoder == "birnn":
+          encoder_outputs, encoder_state = self._birnn_encoder(target,
+              target_length, hparams)
+        else:
+          raise ValueError("Unknown Qx_encoder type: %s" % hparams.Qx_encoder)
 
-    # Infer a Gumbel source sentence.
-    with tf.variable_scope("source_inference_decoder"):
-      if hparams.Qx_decoder == "diagonal":
-        inferred_source = self._diagonal_decoder(encoder_outputs, target_length,
-            predicted_source_length, hparams)
-      elif hparams.Qx_decoder == "rnn":
-        inferred_source = self._rnn_decoder(encoder_outputs, encoder_state,
-            target_length, predicted_source_length, hparams)
-      else:
-        raise ValueError("Unknown Qx_decoder type: %s" % hparams.Qx_decoder)
+      # Infer a Gumbel source sentence.
+      with tf.variable_scope("decoder"):
+        if hparams.Qx_decoder == "diagonal":
+          inferred_source = self._diagonal_decoder(encoder_outputs, target_length,
+              predicted_source_length, hparams)
+        elif hparams.Qx_decoder == "rnn":
+          inferred_source = self._rnn_decoder(encoder_outputs, encoder_state,
+              target_length, predicted_source_length, hparams)
+        else:
+          raise ValueError("Unknown Qx_decoder type: %s" % hparams.Qx_decoder)
 
-    # Create <s> tokens.
-    src_sos_id = tf.cast(self.src_vocab_table.lookup(
-        tf.constant(hparams.sos)), tf.int32)
-    start_tokens = tf.fill([self.batch_size], src_sos_id)
+      # Create <s> tokens.
+      src_sos_id = tf.cast(self.src_vocab_table.lookup(
+          tf.constant(hparams.sos)), tf.int32)
+      start_tokens = tf.fill([self.batch_size], src_sos_id)
 
-    # Now create an input and an output version for the LM, with <s>
-    # appended to the beginning for the input, and the extra predicted
-    # symbol at the end for the output.
-    time_axis = 1
-    start_tokens = tf.expand_dims(
-        tf.one_hot(start_tokens, hparams.src_vocab_size),
-        axis=time_axis)
+      # Now create an input and an output version for the LM, with <s>
+      # appended to the beginning for the input, and the extra predicted
+      # symbol at the end for the output.
+      time_axis = 1
+      start_tokens = tf.expand_dims(
+          tf.one_hot(start_tokens, hparams.src_vocab_size),
+          axis=time_axis)
 
-    source = tf.concat((start_tokens, inferred_source), time_axis)
+      source = tf.concat((start_tokens, inferred_source), time_axis)
 
-    # Mask out all tokens outside of predicted source length with end-of-sentence
-    # one-hot vectors.
-    inferred_source = tf.concat((inferred_source, start_tokens), time_axis)
-    src_eos_id = tf.cast(self.src_vocab_table.lookup(tf.constant(hparams.eos)),
-        tf.int32)
-    eos_matrix = tf.one_hot(tf.fill(tf.shape(inferred_source)[:-1], src_eos_id),
-        self.src_vocab_size, dtype=tf.float32)
-    max_seq_len = tf.reduce_max(predicted_source_length) + 1
-    seq_mask = tf.tile(tf.expand_dims(tf.sequence_mask(predicted_source_length,
-        dtype=tf.bool, maxlen=max_seq_len), axis=-1),
-        multiples=[1, 1, self.src_vocab_size])
-    source_output = tf.where(seq_mask, inferred_source, eos_matrix)
+      # Mask out all tokens outside of predicted source length with end-of-sentence
+      # one-hot vectors.
+      inferred_source = tf.concat((inferred_source, start_tokens), time_axis)
+      src_eos_id = tf.cast(self.src_vocab_table.lookup(tf.constant(hparams.eos)),
+          tf.int32)
+      eos_matrix = tf.one_hot(tf.fill(tf.shape(inferred_source)[:-1], src_eos_id),
+          self.src_vocab_size, dtype=tf.float32)
+      max_seq_len = tf.reduce_max(predicted_source_length) + 1
+      seq_mask = tf.tile(tf.expand_dims(tf.sequence_mask(predicted_source_length,
+          dtype=tf.bool, maxlen=max_seq_len), axis=-1),
+          multiples=[1, 1, self.src_vocab_size])
+      source_output = tf.where(seq_mask, inferred_source, eos_matrix)
 
-    return source, source_output, predicted_source_length+1
+      return source, source_output, predicted_source_length+1
 
   # Computes the loss of a sequence of categorical variables, given observed data.
   def _compute_categorical_loss(self, logits, observations, seq_length):
@@ -398,7 +410,7 @@ class SimpleJointModel(BaselineModel):
     entropy = self._compute_categorical_entropy(self.source, source_weights)
     return lm_loss - entropy
 
-  # Overrides model._compute_loss
+  # Overrides Model._compute_loss
   def _compute_loss(self, tm_logits, lm_logits):
     tm_loss = self._compute_categorical_loss(tm_logits,
         self.target_output, self.target_sequence_length)

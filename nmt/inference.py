@@ -100,6 +100,8 @@ def inference(ckpt,
     model_creator = BaselineModel
   elif hparams.joint_model_type == "dsimple":
     model_creator = djoint.SimpleJoint
+  elif hparams.joint_model_type == "dvae":
+    model_creator = djoint.VAEJointModel
   elif hparams.joint_model_type is not None:
     raise ValueError("Unknown joint model type: %s" % hparams.joint_model_type)
   elif hparams.attention_architecture == "standard":

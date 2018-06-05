@@ -44,7 +44,7 @@ def add_arguments(parser):
   # joint nmt parameters
   parser.add_argument("--joint_model_type", type=str, default=None,
                       help="If set use the specified joint model:"
-                      " baseline|dsimple|dvae|csimple")
+                      " baseline|dsimple|dvae|csimple|cvae")
   parser.add_argument("--num_lm_layers", type=int, default=None,
                       help="Language model depth,"
                       " equal to num_decoder_layers if None.")

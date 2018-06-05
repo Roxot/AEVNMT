@@ -114,27 +114,28 @@ class DSimpleJointModel(BaselineModel):
     return logits
 
   def _positional_encoder(self, target, target_length, hparams):
-      # Embed the target sentence with the decoder embedding matrix.
-      # We use the generative embedding matrix, but stop gradients from
-      # flowing through.
-      embeddings = tf.nn.embedding_lookup(
-          tf.stop_gradient(self.embedding_decoder), target)
-      embeddings = enrich_embeddings_with_positions(embeddings,
-          hparams.num_units, "positional_embeddings")
 
-      # Compute self attention.
-      attention = self_attention_layer(embeddings, target_length,
-          hparams.num_units, mask_diagonal=True)
-      other = tf.matmul(attention, embeddings)
-      att_output = tf.concat([embeddings, other], axis=-1)
+    # Embed the target sentence with the decoder embedding matrix.
+    # We use the generative embedding matrix, but stop gradients from
+    # flowing through.
+    embeddings = tf.nn.embedding_lookup(
+        tf.stop_gradient(self.embedding_decoder), target)
+    embeddings = enrich_embeddings_with_positions(embeddings,
+        hparams.num_units, "positional_embeddings")
 
-      # Put the output vector through an MLP.
-      encoder_outputs = tf.layers.dense(
-          tf.layers.dense(att_output, hparams.num_units, activation=tf.nn.relu),
-          hparams.num_units,
-          activation=None)
+    # Compute self attention.
+    attention = self_attention_layer(embeddings, target_length,
+        hparams.num_units, mask_diagonal=True)
+    other = tf.matmul(attention, embeddings)
+    att_output = tf.concat([embeddings, other], axis=-1)
 
-      return encoder_outputs
+    # Put the output vector through an MLP.
+    encoder_outputs = tf.layers.dense(
+        tf.layers.dense(att_output, hparams.num_units, activation=tf.nn.relu),
+        hparams.num_units,
+        activation=None)
+
+    return encoder_outputs
 
   def _birnn_encoder(self, target, target_length, hparams):
     scope = tf.get_variable_scope()
@@ -179,31 +180,32 @@ class DSimpleJointModel(BaselineModel):
   def _diagonal_decoder(self, encoder_outputs, target_length,
                         predicted_source_length, hparams):
 
-      # Tile encoder_outputs from [B x T_i x d] to [B x T_o x T_i x d]
-      encoder_outputs = tf.expand_dims(encoder_outputs, axis=1)
-      encoder_outputs = tf.tile(encoder_outputs,
-          multiples=[1, tf.reduce_max(predicted_source_length), 1, 1])
 
-      # Create source and target sequence masks.
-      y_mask = tf.sequence_mask(target_length, dtype=tf.float32)
-      x_mask = tf.sequence_mask(predicted_source_length,
-          dtype=tf.float32)
+    # Tile encoder_outputs from [B x T_i x d] to [B x T_o x T_i x d]
+    encoder_outputs = tf.expand_dims(encoder_outputs, axis=1)
+    encoder_outputs = tf.tile(encoder_outputs,
+        multiples=[1, tf.reduce_max(predicted_source_length), 1, 1])
 
-      # Compute fixed decoder coefficients based only on the source and
-      # target sentence length.
-      attention_coefficients = diagonal_attention_coefficients(y_mask, x_mask,
-          target_length, predicted_source_length)
-      attention_coefficients = tf.expand_dims(attention_coefficients, axis=-1)
-      attention_output = tf.reduce_sum(encoder_outputs * attention_coefficients,
-          axis=2)
+    # Create source and target sequence masks.
+    y_mask = tf.sequence_mask(target_length, dtype=tf.float32)
+    x_mask = tf.sequence_mask(predicted_source_length,
+        dtype=tf.float32)
 
-      # Project the attention output to the vocabulary size to obtain the
-      # Gumbel parameters.
-      logits = tf.layers.dense(attention_output, self.src_vocab_size)
-      std_gumbel_sample = self.gumbel.random_standard(tf.shape(logits))
-      inferred_source = tf.nn.softmax(logits + std_gumbel_sample)
+    # Compute fixed decoder coefficients based only on the source and
+    # target sentence length.
+    attention_coefficients = diagonal_attention_coefficients(y_mask, x_mask,
+        target_length, predicted_source_length)
+    attention_coefficients = tf.expand_dims(attention_coefficients, axis=-1)
+    attention_output = tf.reduce_sum(encoder_outputs * attention_coefficients,
+        axis=2)
 
-      return inferred_source
+    # Project the attention output to the vocabulary size to obtain the
+    # Gumbel parameters.
+    logits = tf.layers.dense(attention_output, self.src_vocab_size)
+    std_gumbel_sample = self.gumbel.random_standard(tf.shape(logits))
+    inferred_source = tf.nn.softmax(logits + std_gumbel_sample)
+
+    return inferred_source
 
   def _rnn_decoder(self, encoder_outputs, encoder_state, target_length,
                    predicted_source_length, hparams):

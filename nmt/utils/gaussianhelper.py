@@ -8,7 +8,6 @@ class GaussianHelper(tf.contrib.seq2seq.CustomHelper):
       start_tokens: `int32` vector shaped `[batch_size, num_emb_units]`, the start tokens.
       decode_lengths: `int32` vector shaped `[batch_size]`, the length of the decoded sequences.
     """
-    print(start_tokens)
     self._num_emb_units = start_tokens.shape[1]
     self._batch_size = tf.shape(start_tokens)[0]
     self._start_tokens = start_tokens

@@ -104,6 +104,8 @@ def inference(ckpt,
     model_creator = joint.DVAEJointModel
   elif hparams.joint_model_type == "csimple":
     model_creator = joint.CSimpleJointModel
+  elif hparams.joint_model_type == "cvae":
+    model_creator = joint.CVAEJointModel
   elif hparams.joint_model_type is not None:
     raise ValueError("Unknown joint model type: %s" % hparams.joint_model_type)
   elif hparams.attention_architecture == "standard":

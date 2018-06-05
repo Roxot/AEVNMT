@@ -15,14 +15,24 @@ then
   exit 1
 fi
 
+if [[ $CONFIG == c* ]]
+then
+  echo "Continuous model, using pre-trained word embeddings."
+  EMBED="../data/${SRC}-${TGT}/word_vectors"
+else
+  echo "Discrete model, not using pre-trained word embeddings."
+  EMBED="None"
+fi
+
 python -m nmt.nmt \
     --src=${SRC} \
     --tgt=${TGT} \
     --out_dir=${OUTPUT_DIR} \
     --vocab_prefix=../data/${SRC}-${TGT}/vocab \
     --train_prefix=../data/${SRC}-${TGT}/training \
-    --dev_prefix=../data/${SRC}-${TGT}/dev \
+    --dev_prefix=../data/${SRC}-${TGT}/smalldev \
     --mono_prefix=../data/${SRC}-${TGT}/mono \
+    --embed_prefix=${EMBED} \
     --hparams_path=${HPARAMS} \
     &> ${OUTPUT_DIR}/log &
 

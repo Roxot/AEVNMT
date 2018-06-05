@@ -112,16 +112,16 @@ def get_infer_iterator(src_dataset,
   return BatchedInput(
       initializer=batched_iter.initializer,
       source=src_ids,
-      source_output=None,
-      target_input=None,
-      target_output=None,
+      source_output=tf.zeros([1, 1], dtype=tf.int32),
+      target_input=tf.zeros([1, 1], dtype=tf.int32),
+      target_output=tf.zeros([1, 1], dtype=tf.int32),
       source_sequence_length=src_seq_len,
-      target_sequence_length=None,
+      target_sequence_length=tf.ones([1], dtype=tf.int32),
       mono_initializer=None,
-      mono_text_input=None,
-      mono_text_output=None,
-      mono_text_length=None,
-      predicted_source_length=None,
+      mono_text_input=tf.zeros([1, 1], dtype=tf.int32),
+      mono_text_output=tf.zeros([1, 1], dtype=tf.int32),
+      mono_text_length=tf.ones([1], dtype=tf.int32),
+      predicted_source_length=tf.ones([1], dtype=tf.int32),
       mono_batch=tf.constant(False))
 
 def get_iterator(src_dataset,
@@ -257,30 +257,32 @@ def get_iterator(src_dataset,
     mono_text_input, mono_text_output, mono_text_length, \
         predicted_source_length = tf.cond(
             mono_batch,
-            lambda: mono_iterator.get_next(),
-            lambda: (tf.zeros([batch_size, 1], dtype=tf.int32), # mono_txt_input
+            true_fn=lambda: mono_iterator.get_next(),
+            false_fn=lambda: (
+                     tf.zeros([batch_size, 1], dtype=tf.int32), # mono_txt_input
                      tf.zeros([batch_size, 1], dtype=tf.int32), # mono_txt_output
-                     tf.zeros([batch_size], dtype=tf.int32),    # mono_txt_len
-                     tf.zeros([batch_size], dtype=tf.int32)))   # pred_src_len
+                     tf.ones([batch_size], dtype=tf.int32),     # mono_txt_len
+                     tf.ones([batch_size], dtype=tf.int32)))    # pred_src_len
     mono_initializer = mono_iterator.initializer
   else:
     mono_text_input, mono_text_output, mono_text_length, predicted_source_length = \
         (tf.zeros([batch_size, 1], dtype=tf.int32), # mono_txt_input
          tf.zeros([batch_size, 1], dtype=tf.int32), # mono_txt_output
-         tf.zeros([batch_size], dtype=tf.int32),    # mono_txt_len
-         tf.zeros([batch_size], dtype=tf.int32))   # pred_src_len
+         tf.ones([batch_size], dtype=tf.int32),     # mono_txt_len
+         tf.ones([batch_size], dtype=tf.int32))    # pred_src_len
     mono_initializer = None
 
   # If a monolingual batch, just give a batch of zeros for the bilingual data.
   (src_input_ids, src_output_ids, tgt_input_ids, tgt_output_ids, \
       src_seq_len, tgt_seq_len) = tf.cond(mono_batch,
-          lambda: (tf.zeros([batch_size, 1], dtype=tf.int32), # src
+          true_fn=lambda: (
+                   tf.zeros([batch_size, 1], dtype=tf.int32), # src
                    tf.zeros([batch_size, 1], dtype=tf.int32), # src_output
                    tf.zeros([batch_size, 1], dtype=tf.int32), # tgt_input
                    tf.zeros([batch_size, 1], dtype=tf.int32), # tgt_output
-                   tf.zeros([batch_size], dtype=tf.int32),    # src_len
-                   tf.zeros([batch_size], dtype=tf.int32)),   # tgt_len
-          lambda: bilingual_iterator.get_next())
+                   tf.ones([batch_size], dtype=tf.int32),     # src_len
+                   tf.ones([batch_size], dtype=tf.int32)),    # tgt_len
+          false_fn=lambda: bilingual_iterator.get_next())
 
   return BatchedInput(
       initializer=bilingual_iterator.initializer,

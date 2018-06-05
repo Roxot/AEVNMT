@@ -6,7 +6,9 @@ import tensorflow as tf
 
 import nmt.utils.misc_utils as utils
 
+from nmt.joint.utils import make_initial_state
 from nmt.attention_model import AttentionModel
+from nmt import model_helper
 
 class BaselineModel(AttentionModel):
 
@@ -41,14 +43,6 @@ class BaselineModel(AttentionModel):
     else:
       return tf.transpose(tensor)
 
-  def _make_initial_state(self, initial_state_val, unit_type):
-    if unit_type == "lstm":
-      initial_state = tf.contrib.rnn.LSTMStateTuple(initial_state_val,
-          tf.zeros_like(initial_state_val))
-      return initial_state
-    else:
-      raise ValueError("Unknown unit_type: %s for _make_initial_state" % unit_type)
-
   # Overrides model._build_encoder
   # A version that allows for variable ways to look up source embeddings with
   # self._source_embedding(source), and that allows for an extra encoder input
@@ -78,7 +72,7 @@ class BaselineModel(AttentionModel):
         if z_sample is not None:
           utils.print_out("  initializing generative encoder with tanh(Wz)")
           init_state_val = tf.tanh(tf.layers.dense(z_sample, hparams.num_units))
-          init_state = self._make_initial_state(init_state_val, hparams.unit_type)
+          init_state = make_initial_state(init_state_val, hparams.unit_type)
         else:
           utils.print_out("  initializing generative encoder with zeros.")
           init_state = cell.zero_state(self.batch_size)
@@ -100,7 +94,7 @@ class BaselineModel(AttentionModel):
         # If a z sample is provided, use it as the initial state of the encoder.
         if z_sample is not None:
           init_state_val = tf.tanh(tf.layers.dense(z_sample, hparams.num_units))
-          init_state = self._make_initial_state(init_state_val, hparams.unit_type)
+          init_state = make_initial_state(init_state_val, hparams.unit_type)
         else:
           init_state = None
 
@@ -176,13 +170,15 @@ class BaselineModel(AttentionModel):
   # Overrides Model._build_decoder
   # Accepts a z_sample to set initial state of the decoder (VAEJointModel).
   # Will ignore hparams.pass_hidden_state if z_sample is given.
-  def _build_decoder(self, encoder_outputs, encoder_state, hparams, z_sample=None):
+  def _build_decoder(self, encoder_outputs, encoder_state, hparams,
+      z_sample=None):
     """Build and run a RNN decoder with a final projection layer.
 
     Args:
       encoder_outputs: The outputs of encoder for every time step.
       encoder_state: The final state of the encoder.
       hparams: The Hyperparameters configurations.
+      z_sample: If set will initialize the decoder with it.
 
     Returns:
       A tuple of final logits and final decoder state:
@@ -207,7 +203,7 @@ class BaselineModel(AttentionModel):
         dtype = decoder_scope.dtype
         utils.print_out("  overriding decoder_initial_state with tanh(Wz)")
         init_state_val = tf.tanh(tf.layers.dense(z_sample, hparams.num_units))
-        init_state = self._make_initial_state(init_state_val, hparams.unit_type)
+        init_state = make_initial_state(init_state_val, hparams.unit_type)
 
         # If we do beam search we need to tile the initial state
         if self.mode == tf.contrib.learn.ModeKeys.INFER and hparams.beam_width > 0:
@@ -310,3 +306,78 @@ class BaselineModel(AttentionModel):
           sample_id = outputs.sample_id
 
     return logits, sample_id, final_context_state
+
+  # Overrides AttentionModel._build_decoder_cell
+  # Allows to disable inference mode.
+  def _build_decoder_cell(self, hparams, encoder_outputs, encoder_state,
+                          source_sequence_length, no_infer=False):
+    """Build a RNN cell with attention mechanism that can be used by decoder."""
+    attention_option = hparams.attention
+    attention_architecture = hparams.attention_architecture
+
+    if attention_architecture != "standard":
+      raise ValueError(
+          "Unknown attention architecture %s" % attention_architecture)
+
+    num_units = hparams.num_units
+    num_layers = self.num_decoder_layers
+    num_residual_layers = self.num_decoder_residual_layers
+    beam_width = hparams.beam_width
+
+    dtype = tf.float32
+
+    # Ensure memory is batch-major
+    if self.time_major:
+      memory = tf.transpose(encoder_outputs, [1, 0, 2])
+    else:
+      memory = encoder_outputs
+
+    if self.mode == tf.contrib.learn.ModeKeys.INFER and beam_width > 0 and \
+        not no_infer:
+      memory = tf.contrib.seq2seq.tile_batch(
+          memory, multiplier=beam_width)
+      source_sequence_length = tf.contrib.seq2seq.tile_batch(
+          source_sequence_length, multiplier=beam_width)
+      encoder_state = tf.contrib.seq2seq.tile_batch(
+          encoder_state, multiplier=beam_width)
+      batch_size = self.batch_size * beam_width
+    else:
+      batch_size = self.batch_size
+
+    attention_mechanism = self.attention_mechanism_fn(
+        attention_option, num_units, memory, source_sequence_length, self.mode)
+
+    cell = model_helper.create_rnn_cell(
+        unit_type=hparams.unit_type,
+        num_units=num_units,
+        num_layers=num_layers,
+        num_residual_layers=num_residual_layers,
+        forget_bias=hparams.forget_bias,
+        dropout=hparams.dropout,
+        num_gpus=self.num_gpus,
+        mode=self.mode,
+        single_cell_fn=self.single_cell_fn)
+
+    # Only generate alignment in greedy INFER mode.
+    alignment_history = (self.mode == tf.contrib.learn.ModeKeys.INFER and
+                         beam_width == 0 and not no_infer)
+    cell = tf.contrib.seq2seq.AttentionWrapper(
+        cell,
+        attention_mechanism,
+        attention_layer_size=num_units,
+        alignment_history=alignment_history,
+        output_attention=hparams.output_attention,
+        name="attention")
+
+    # TODO(thangluong): do we need num_layers, num_gpus?
+    cell = tf.contrib.rnn.DeviceWrapper(cell,
+                                        model_helper.get_device_str(
+                                            num_layers - 1, self.num_gpus))
+
+    if hparams.pass_hidden_state:
+      decoder_initial_state = cell.zero_state(batch_size, dtype).clone(
+          cell_state=encoder_state)
+    else:
+      decoder_initial_state = cell.zero_state(batch_size, dtype)
+
+    return cell, decoder_initial_state

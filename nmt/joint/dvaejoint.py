@@ -7,15 +7,15 @@ import tensorflow as tf
 import nmt.utils.misc_utils as utils
 
 from nmt import model_helper
-from . import SimpleJointModel
+from . import DSimpleJointModel
 
-class VAEJointModel(SimpleJointModel):
+class DVAEJointModel(DSimpleJointModel):
 
   def __init__(self, hparams, mode, iterator, source_vocab_table,
                target_vocab_table, reverse_target_vocab_table=None,
                scope=None, extra_args=None):
 
-    super(VAEJointModel, self).__init__(hparams=hparams, mode=mode,
+    super(DVAEJointModel, self).__init__(hparams=hparams, mode=mode,
         iterator=iterator, source_vocab_table=source_vocab_table,
         target_vocab_table=target_vocab_table,
         reverse_target_vocab_table=reverse_target_vocab_table,
@@ -162,15 +162,15 @@ class VAEJointModel(SimpleJointModel):
     # The cross-entropy for the language model also under a sample of the latent
     # variable(s). Not correct mathematically, if we use the relaxation.
     lm_loss = tf.cond(self.mono_batch,
-        lambda: tf.constant(0.),
-        lambda: self._compute_dense_categorical_loss(lm_logits, self.source_output,
-                                                     self.source_sequence_length))
+        true_fn=lambda: tf.constant(0.),
+        false_fn=lambda: self._compute_dense_categorical_loss(lm_logits,
+                         self.source_output, self.source_sequence_length))
 
     # We use the KL heuristic as an unjustified approximation for monolingual
     # batches.
     KL_x = tf.cond(self.mono_batch,
-        lambda: self._KL_heuristic(lm_logits),
-        lambda: tf.constant(0.))
+        true_fn=lambda: self._KL_heuristic(lm_logits),
+        false_fn=lambda: tf.constant(0.))
 
     # We compute an analytical KL between the Gaussian variational approximation
     # and its Gaussian prior.

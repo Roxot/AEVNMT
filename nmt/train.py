@@ -22,7 +22,7 @@ import time
 
 import tensorflow as tf
 
-import nmt.djoint as djoint
+import nmt.joint as joint
 
 from .baseline import BaselineModel
 from . import attention_model
@@ -292,9 +292,11 @@ def train(hparams, scope=None, target_session=""):
     if hparams.joint_model_type == "baseline":
       model_creator = BaselineModel
     elif hparams.joint_model_type == "dsimple":
-      model_creator = djoint.SimpleJointModel
+      model_creator = joint.DSimpleJointModel
     elif hparams.joint_model_type == "dvae":
-      model_creator = djoint.VAEJointModel
+      model_creator = joint.DVAEJointModel
+    elif hparams.joint_model_type == "csimple":
+      model_creator = joint.CSimpleJointModel
     elif hparams.joint_model_type is not None:
       raise ValueError("Unknown joint model type: %s" % hparams.joint_model_type)
     elif (hparams.encoder_type == "gnmt" or

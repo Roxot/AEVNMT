@@ -295,7 +295,8 @@ def create_emb_for_encoder_and_decoder(share_vocab,
                                        tgt_vocab_file=None,
                                        src_embed_file=None,
                                        tgt_embed_file=None,
-                                       scope=None):
+                                       scope=None,
+                                       src_trainable=True):
   """Create embedding matrix for both encoder and decoder.
 
   Args:
@@ -310,6 +311,7 @@ def create_emb_for_encoder_and_decoder(share_vocab,
     dtype: dtype of the embedding matrix. Default to float32.
     num_partitions: number of partitions used for the embedding vars.
     scope: VariableScope for the created subgraph. Default to "embedding".
+    src_trainable: Whether the source embeddings should be trainable.
 
   Returns:
     embedding_encoder: Encoder's embedding matrix.

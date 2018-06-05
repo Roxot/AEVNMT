@@ -72,6 +72,6 @@ class GumbelHelper(tf.contrib.seq2seq.CustomHelper):
     # the Gumbel samples by multiplying with the embedding matrix.
     next_inputs = tf.cond(
         all_finished,
-        lambda: self._start_inputs,
-        lambda: tf.matmul(sample_ids, self._embedding_matrix))
+        true_fn=lambda: self._start_inputs,
+        false_fn=lambda: tf.matmul(sample_ids, self._embedding_matrix))
     return (finished, next_inputs, state)

@@ -35,7 +35,7 @@ utils.check_tensorflow_version()
 
 FLAGS = None
 
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 
 def add_arguments(parser):
   """Build ArgumentParser."""
@@ -44,7 +44,7 @@ def add_arguments(parser):
   # joint nmt parameters
   parser.add_argument("--joint_model_type", type=str, default=None,
                       help="If set use the specified joint model:"
-                      " baseline|dsimple|dvae")
+                      " baseline|dsimple|dvae|csimple")
   parser.add_argument("--num_lm_layers", type=int, default=None,
                       help="Language model depth,"
                       " equal to num_decoder_layers if None.")

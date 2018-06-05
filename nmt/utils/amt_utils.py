@@ -1,3 +1,5 @@
+# Alternative MT utils.
+
 import tensorflow as tf
 import math
 

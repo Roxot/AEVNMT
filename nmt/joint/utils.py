@@ -53,5 +53,7 @@ def make_initial_state(initial_state_val, unit_type):
     initial_state = tf.contrib.rnn.LSTMStateTuple(initial_state_val,
         tf.zeros_like(initial_state_val))
     return initial_state
+  elif unit_type == "gru":
+    return initial_state_val
   else:
     raise ValueError("Unknown unit_type: %s for make_initial_state" % unit_type)

@@ -17,9 +17,6 @@ class BaselineModel(AttentionModel):
                scope=None, extra_args=None):
 
     # Make sure some requirements on the hyperparameters are met.
-    assert hparams.unit_type == "lstm"
-    assert hparams.encoder_type == "bi"
-    assert hparams.num_encoder_layers == 2
     assert hparams.pass_hidden_state == False
 
     # For use for numerical stability.

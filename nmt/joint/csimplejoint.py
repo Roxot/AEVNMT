@@ -16,7 +16,7 @@ class CSimpleJointModel(DSimpleJointModel):
 
   def __init__(self, hparams, mode, iterator, source_vocab_table,
                target_vocab_table, reverse_target_vocab_table=None,
-               scope=None, extra_args=None):
+               scope=None, extra_args=None, no_summaries=False):
 
     assert hparams.src_embed_file
 
@@ -24,7 +24,23 @@ class CSimpleJointModel(DSimpleJointModel):
         iterator=iterator, source_vocab_table=source_vocab_table,
         target_vocab_table=target_vocab_table,
         reverse_target_vocab_table=reverse_target_vocab_table,
-        scope=scope, extra_args=extra_args)
+        scope=scope, extra_args=extra_args, no_summaries=True)
+
+    # Set model specific training summaries.
+    if self.mode == tf.contrib.learn.ModeKeys.TRAIN and not no_summaries:
+      self.bi_summary = tf.summary.merge([
+          self._base_summaries,
+          tf.summary.scalar("supervised_tm_accuracy", self._tm_accuracy),
+          tf.summary.scalar("supervised_ELBO", self._elbo),
+          tf.summary.scalar("supervised_tm_loss", self._tm_loss),
+          tf.summary.scalar("supervised_lm_loss", self._lm_loss)])
+      self.mono_summary = tf.summary.merge([
+          self._base_summaries,
+          tf.summary.scalar("semi_supervised_tm_accuracy", self._tm_accuracy),
+          tf.summary.scalar("semi_supervised_ELBO", self._elbo),
+          tf.summary.scalar("semi_supervised_tm_loss", self._tm_loss),
+          tf.summary.scalar("semi_supervised_lm_loss", self._lm_loss),
+          tf.summary.scalar("semi_supervised_entropy", self._entropy)])
 
   # Overrides DSimpleJointModel._source_embedding
   # We use pre-trained embeddings, thus don't do an embedding lookup.
@@ -109,9 +125,16 @@ class CSimpleJointModel(DSimpleJointModel):
         if self.mode != tf.contrib.learn.ModeKeys.INFER:
           with tf.device(model_helper.get_device_str(self.num_encoder_layers - 1,
                                                      self.num_gpus)):
-            loss = self._compute_loss(tm_logits, gauss_observations)
+            loss, components = self._compute_loss(tm_logits, gauss_observations)
         else:
           loss = None
+
+    # Save for summaries.
+    if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
+      self._tm_loss = components[0]
+      self._lm_loss = components[1]
+      self._entropy = components[2]
+      self._elbo = -loss
 
     return tm_logits, loss, final_context_state, sample_id
 
@@ -232,4 +255,4 @@ class CSimpleJointModel(DSimpleJointModel):
         true_fn=lambda: tf.reduce_mean(tf.reduce_sum(self.Qx.entropy(), axis=1)),
         false_fn=lambda: tf.constant(0.))
 
-    return tm_loss + lm_loss - entropy
+    return tm_loss + lm_loss - entropy, (tm_loss, lm_loss, entropy)

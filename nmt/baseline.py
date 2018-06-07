@@ -31,6 +31,25 @@ class BaselineModel(AttentionModel):
         reverse_target_vocab_table=reverse_target_vocab_table,
         scope=scope, extra_args=extra_args)
 
+    if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
+
+      # Set some base summaries that all VI models will use.
+      tm_accuracy = self._compute_accuracy(self._logits, self.target_output,
+          self.target_sequence_length)
+      self._base_summaries = tf.summary.merge([
+          self._lr_summary,
+          ] + self._grad_norm_summary)
+
+      # Also add the tm accuracy summary to the baseline's summaries.
+      self.train_summary = tf.summary.merge([
+          self.train_summary,
+          tf.summary.scalar("supervised_tm_accuracy", tm_accuracy)])
+
+      # Allows for different summaries for monolingual and bilingual batches.
+      self.mono_summary = self.train_summary
+      self.bi_summary = self.train_summary
+      self._tm_accuracy = tm_accuracy
+
   # Returns the embeddings for a given source batch.
   def _source_embedding(self, source):
     return tf.nn.embedding_lookup(self.embedding_encoder, source)
@@ -381,3 +400,37 @@ class BaselineModel(AttentionModel):
       decoder_initial_state = cell.zero_state(batch_size, dtype)
 
     return cell, decoder_initial_state
+
+  # Returns different summaries depending on whether the model is training on
+  # a monolingual batch or not.
+  def train(self, sess, feed_dict={}):
+    assert self.mode == tf.contrib.learn.ModeKeys.TRAIN
+    if feed_dict[self.mono_batch]:
+      train_summary = self.mono_summary
+    else:
+      train_summary = self.bi_summary
+    return sess.run([self.update,
+                     self.train_loss,
+                     self.predict_count,
+                     train_summary,
+                     self.global_step,
+                     self.word_count,
+                     self.batch_size,
+                     self.grad_norm,
+                     self.learning_rate], feed_dict=feed_dict)
+
+  # Computes the accuracy of how often the max(logits) correctly predicts
+  # labels.
+  def _compute_accuracy(self, logits, labels, length):
+    max_time = self.get_max_time(logits) # time
+    mask = tf.sequence_mask(length, max_time, dtype=logits.dtype) # batch x time
+    if self.time_major:
+      labels = self._transpose_time_major(labels) # time x batch
+      mask = self._transpose_time_major(mask) # time x batch
+
+    predictions = tf.argmax(logits, axis=-1, output_type=tf.int32) # time x batch
+    equals = tf.cast(tf.equal(predictions, labels), tf.float32)
+    time_axis = 0 if self.time_major else 1
+    length = tf.cast(length, tf.float32) # batch
+    sentence_accuracies = tf.reduce_sum(equals * mask, axis=time_axis) / length
+    return tf.reduce_mean(sentence_accuracies)

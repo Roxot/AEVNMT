@@ -17,7 +17,7 @@ class DSimpleJointModel(BaselineModel):
 
   def __init__(self, hparams, mode, iterator, source_vocab_table,
                target_vocab_table, reverse_target_vocab_table=None,
-               scope=None, extra_args=None):
+               scope=None, extra_args=None, no_summaries=False):
 
     self.gumbel = Gumbel()
 
@@ -28,6 +28,24 @@ class DSimpleJointModel(BaselineModel):
         scope=scope, extra_args=extra_args)
 
     self.supports_monolingual = True
+
+    # Set model specific training summaries.
+    if self.mode == tf.contrib.learn.ModeKeys.TRAIN and not no_summaries:
+      self.bi_summary = tf.summary.merge([
+          self._base_summaries,
+          tf.summary.scalar("supervised_ELBO", self._elbo),
+          tf.summary.scalar("supervised_tm_loss", self._tm_loss),
+          tf.summary.scalar("supervised_lm_loss", self._lm_loss),
+          tf.summary.scalar("supervised_tm_accuracy", self._tm_accuracy),
+          tf.summary.scalar("supervised_lm_accuracy", self._lm_accuracy)])
+      self.mono_summary = tf.summary.merge([
+          self._base_summaries,
+          tf.summary.scalar("semi_supervised_tm_accuracy", self._tm_accuracy),
+          tf.summary.scalar("semi_supervised_ELBO", self._elbo),
+          tf.summary.scalar("semi_supervised_tm_loss", self._tm_loss),
+          tf.summary.scalar("semi_supervised_lm_loss", self._lm_loss),
+          tf.summary.scalar("semi_supervised_entropy", self._entropy)])
+
 
   # Overrides Model._parse_iterator
   # Parses the data iterator and sets instance variables correctly.
@@ -80,9 +98,20 @@ class DSimpleJointModel(BaselineModel):
         if self.mode != tf.contrib.learn.ModeKeys.INFER:
           with tf.device(model_helper.get_device_str(self.num_encoder_layers - 1,
                                                      self.num_gpus)):
-            loss = self._compute_loss(tm_logits, lm_logits)
+            loss, components = self._compute_loss(tm_logits, lm_logits)
         else:
           loss = None
+
+    # Save for summaries.
+    if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
+      self._tm_loss = components[0]
+      self._lm_loss = components[1]
+      self._entropy = components[2]
+      self._elbo = -loss
+
+      self._lm_accuracy = self._compute_accuracy(lm_logits,
+          tf.argmax(self.source_output, axis=-1, output_type=tf.int32),
+          self.source_sequence_length)
 
     return tm_logits, loss, final_context_state, sample_id
 
@@ -394,13 +423,17 @@ class DSimpleJointModel(BaselineModel):
     tm_loss = self._compute_categorical_loss(tm_logits,
         self.target_output, self.target_sequence_length)
 
-    lm_loss = tf.cond(self.mono_batch,
-        true_fn=lambda: tf.constant(0.),
-        false_fn=lambda: self._compute_dense_categorical_loss(lm_logits,
-                         self.source_output, self.source_sequence_length))
+    # This is mathematically unjustified, but acts together with the entropy
+    # as a heuristic to compute the infeasible loss.
+    lm_loss = self._compute_dense_categorical_loss(lm_logits,
+        self.source_output, self.source_sequence_length)
 
-    KL = tf.cond(self.mono_batch,
-        true_fn=lambda: self._KL_heuristic(lm_logits),
+    max_source_time = self.get_max_time(lm_logits)
+    source_weights = tf.sequence_mask(self.source_sequence_length,
+        max_source_time, dtype=lm_logits.dtype)
+    entropy = tf.cond(self.mono_batch,
+        true_fn=lambda: self._compute_categorical_entropy(self.source,
+                                                          source_weights),
         false_fn=lambda: tf.constant(0.))
 
-    return tm_loss + lm_loss + KL
+    return tm_loss + lm_loss - entropy, (tm_loss, lm_loss, entropy)

@@ -58,7 +58,6 @@ class BaseModel(object):
         required in INFER mode. Defaults to None.
       scope: scope of the model.
       extra_args: model_helper.ExtraArgs, for passing customizable functions.
-
     """
     self.supports_monolingual = False
     self.mode = mode
@@ -109,6 +108,7 @@ class BaseModel(object):
     ## Train graph
     res = self.build_graph(hparams, scope=scope)
 
+    self._logits = res[0]
     if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
       self.train_loss = res[1]
       self.word_count = tf.reduce_sum(
@@ -159,10 +159,12 @@ class BaseModel(object):
           zip(clipped_grads, params), global_step=self.global_step)
 
       # Summary
+      self._lr_summary = tf.summary.scalar("lr", self.learning_rate),
       self.train_summary = tf.summary.merge([
-          tf.summary.scalar("lr", self.learning_rate),
+          self._lr_summary,
           tf.summary.scalar("train_loss", self.train_loss),
       ] + grad_norm_summary)
+      self._grad_norm_summary = grad_norm_summary
 
     if self.mode == tf.contrib.learn.ModeKeys.INFER:
       self.infer_summary = self._get_infer_summary(hparams)

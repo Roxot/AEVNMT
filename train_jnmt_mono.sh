@@ -30,7 +30,7 @@ python -m nmt.nmt \
     --out_dir=${OUTPUT_DIR} \
     --vocab_prefix=../data/${SRC}-${TGT}/vocab \
     --train_prefix=../data/${SRC}-${TGT}/training \
-    --dev_prefix=../data/${SRC}-${TGT}/smalldev \
+    --dev_prefix=../data/${SRC}-${TGT}/dev \
     --mono_prefix=../data/${SRC}-${TGT}/mono \
     --embed_prefix=${EMBED} \
     --hparams_path=${HPARAMS} \

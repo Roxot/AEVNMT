@@ -57,8 +57,8 @@ def run_sample_decode(infer_model, infer_sess, model_dir, hparams,
 
 def run_internal_eval(
     eval_model, eval_sess, model_dir, hparams, summary_writer,
-    use_test_set=True):
-  """Compute internal evaluation (perplexity) for both dev / test."""
+    use_test_set=True, use_elbo=False):
+  """Compute internal evaluation (perplexity or elbo) for both dev / test."""
   with eval_model.graph.as_default():
     loaded_eval_model, global_step = model_helper.create_or_load_model(
         eval_model.model, model_dir, eval_sess, "eval")
@@ -70,10 +70,10 @@ def run_internal_eval(
       eval_model.tgt_file_placeholder: dev_tgt_file
   }
 
-  dev_ppl = _internal_eval(loaded_eval_model, global_step, eval_sess,
+  dev_internal_score = _internal_eval(loaded_eval_model, global_step, eval_sess,
                            eval_model.iterator, dev_eval_iterator_feed_dict,
-                           summary_writer, "dev")
-  test_ppl = None
+                           summary_writer, "dev", use_elbo=use_elbo)
+  test_internal_score = None
   if use_test_set and hparams.test_prefix:
     test_src_file = "%s.%s" % (hparams.test_prefix, hparams.src)
     test_tgt_file = "%s.%s" % (hparams.test_prefix, hparams.tgt)
@@ -81,10 +81,10 @@ def run_internal_eval(
         eval_model.src_file_placeholder: test_src_file,
         eval_model.tgt_file_placeholder: test_tgt_file
     }
-    test_ppl = _internal_eval(loaded_eval_model, global_step, eval_sess,
+    test_internal_score = _internal_eval(loaded_eval_model, global_step, eval_sess,
                               eval_model.iterator, test_eval_iterator_feed_dict,
-                              summary_writer, "test")
-  return dev_ppl, test_ppl
+                              summary_writer, "test", use_elbo=use_elbo)
+  return dev_internal_score, test_internal_score
 
 
 def run_external_eval(infer_model, infer_sess, model_dir, hparams,
@@ -161,18 +161,20 @@ def run_avg_external_eval(infer_model, infer_sess, model_dir, hparams,
 
 def run_full_eval(model_dir, infer_model, infer_sess, eval_model, eval_sess,
                   hparams, summary_writer, sample_src_data, sample_tgt_data,
-                  avg_ckpts=False):
+                  avg_ckpts=False, use_elbo=False):
   """Wrapper for running sample_decode, internal_eval and external_eval."""
   run_sample_decode(infer_model, infer_sess, model_dir, hparams, summary_writer,
                     sample_src_data, sample_tgt_data)
-  dev_ppl, test_ppl = run_internal_eval(
-      eval_model, eval_sess, model_dir, hparams, summary_writer)
+  dev_internal_score, test_internal_score = run_internal_eval(
+      eval_model, eval_sess, model_dir, hparams, summary_writer,
+      use_elbo=use_elbo)
   dev_scores, test_scores, global_step = run_external_eval(
       infer_model, infer_sess, model_dir, hparams, summary_writer)
 
+  internal_score_name = "elbo" if use_elbo else "ppl"
   metrics = {
-      "dev_ppl": dev_ppl,
-      "test_ppl": test_ppl,
+      "dev_%s" % internal_score_name: dev_internal_score,
+      "test_%s" % internal_score_name: test_internal_score,
       "dev_scores": dev_scores,
       "test_scores": test_scores,
   }
@@ -185,16 +187,19 @@ def run_full_eval(model_dir, infer_model, infer_sess, eval_model, eval_sess,
     metrics["avg_dev_scores"] = avg_dev_scores
     metrics["avg_test_scores"] = avg_test_scores
 
-  result_summary = _format_results("dev", dev_ppl, dev_scores, hparams.metrics)
+  result_summary = _format_results("dev", dev_internal_score, dev_scores,
+      hparams.metrics, use_elbo=use_elbo)
   if avg_dev_scores:
     result_summary += ", " + _format_results("avg_dev", None, avg_dev_scores,
-                                             hparams.metrics)
+        hparams.metrics)
+
   if hparams.test_prefix:
-    result_summary += ", " + _format_results("test", test_ppl, test_scores,
-                                             hparams.metrics)
+    result_summary += ", " + _format_results("test", test_internal_score,
+        test_scores, hparams.metrics, use_elbo=use_elbo)
+
     if avg_test_scores:
       result_summary += ", " + _format_results("avg_test", None,
-                                               avg_test_scores, hparams.metrics)
+          avg_test_scores, hparams.metrics)
 
   return result_summary, global_step, metrics
 
@@ -220,30 +225,44 @@ def update_stats(stats, start_time, step_result):
   return global_step, learning_rate, step_summary
 
 
-def print_step_info(prefix, global_step, info, result_summary, log_f):
+def print_step_info(prefix, global_step, info, result_summary, log_f,
+    use_elbo=False):
   """Print all info at the current global step."""
-  utils.print_out(
-      "%sstep %d lr %g step-time %.2fs wps %.2fK ppl %.2f gN %.2f %s, %s" %
-      (prefix, global_step, info["learning_rate"], info["avg_step_time"],
-       info["speed"], info["train_ppl"], info["avg_grad_norm"],
-       result_summary, time.ctime()),
-      log_f)
+  if not use_elbo:
+    utils.print_out(
+        "%sstep %d lr %g step-time %.2fs wps %.2fK ppl %.2f gN %.2f %s, %s" %
+        (prefix, global_step, info["learning_rate"], info["avg_step_time"],
+         info["speed"], info["train_ppl"], info["avg_grad_norm"],
+         result_summary, time.ctime()),
+        log_f)
+  else:
+    utils.print_out(
+        "%sstep %d lr %g step-time %.2fs wps %.2fK s-ELBO %.2f ss-ELBO %.2f"
+        " gN %.2f %s, %s" %
+        (prefix, global_step, info["learning_rate"], info["avg_step_time"],
+         info["speed"], info["s_elbo"], info["ss_elbo"], info["avg_grad_norm"],
+         result_summary, time.ctime()),
+        log_f)
 
-def process_stats(stats, info, global_step, steps_per_stats, log_f):
+def process_stats(stats, info, global_step, steps_per_stats, log_f,
+    calculate_ppl=True):
   """Update info and check for overflow."""
   # Update info
   info["avg_step_time"] = stats["step_time"] / steps_per_stats
   info["avg_grad_norm"] = stats["grad_norm"] / steps_per_stats
-  info["train_ppl"] = utils.safe_exp(stats["loss"] / stats["predict_count"])
   info["speed"] = stats["total_count"] / (1000 * stats["step_time"])
 
-  # Check for overflow
+  # TODO experimental
   is_overflow = False
-  train_ppl = info["train_ppl"]
-  if math.isnan(train_ppl) or math.isinf(train_ppl) or train_ppl > 1e20:
-    utils.print_out("  step %d overflow, stop early" % global_step,
-                    log_f)
-    is_overflow = True
+  if calculate_ppl:
+    info["train_ppl"] = utils.safe_exp(stats["loss"] / stats["predict_count"])
+
+    # Check for overflow
+    train_ppl = info["train_ppl"]
+    if math.isnan(train_ppl) or math.isinf(train_ppl) or train_ppl > 1e20:
+      utils.print_out("  step %d overflow, stop early" % global_step,
+                      log_f)
+      is_overflow = True
 
   return is_overflow
 
@@ -253,7 +272,7 @@ def before_train(loaded_train_model, train_model, train_sess, global_step,
   """Misc tasks to do before training."""
   stats = init_stats()
   info = {"train_ppl": 0.0, "speed": 0.0, "avg_step_time": 0.0,
-          "avg_grad_norm": 0.0,
+          "avg_grad_norm": 0.0, "s_elbo": 0.0, "ss_elbo": 0.0,
           "learning_rate": loaded_train_model.learning_rate.eval(
               session=train_sess)}
   start_train_time = time.time()
@@ -348,12 +367,16 @@ def train(hparams, scope=None, target_session=""):
   summary_writer = tf.summary.FileWriter(
       os.path.join(out_dir, summary_name), train_model.graph)
 
+  # For joint models we log the elbo instead of the ppl.
+  use_elbo = hparams.joint_model_type is not None and \
+      hparams.joint_model_type != "baseline"
+
   # First evaluation
   run_full_eval(
       model_dir, infer_model, infer_sess,
       eval_model, eval_sess, hparams,
       summary_writer, sample_src_data,
-      sample_tgt_data, avg_ckpts)
+      sample_tgt_data, avg_ckpts, use_elbo=use_elbo)
 
   last_stats_step = global_step
   last_eval_step = global_step
@@ -361,6 +384,7 @@ def train(hparams, scope=None, target_session=""):
   monolingual_batch = False
   num_bilingual_batches = 0
   num_monolingual_batches = 0
+  mono_step_summary, bi_step_summary = (None, None)
   train_feed_dict = {}
 
   # This is the training loop.
@@ -376,6 +400,17 @@ def train(hparams, scope=None, target_session=""):
       hparams.epoch_step += 1
       num_monolingual_batches += 1 if monolingual_batch else 0
       num_bilingual_batches += 1 if not monolingual_batch else 0
+
+      # Keep track of bi- and monolingual ELBO & summaries separately for
+      # VI models.
+      if use_elbo:
+        elbo = -step_result[1]
+        if monolingual_batch:
+          info["ss_elbo"] = elbo
+          mono_step_summary = step_result[3]
+        else:
+          info["s_elbo"] = elbo
+          bi_step_summary = step_result[3]
 
       # Switch between bilingual and monolingual batches if monolingual data
       # is given.
@@ -417,15 +452,25 @@ def train(hparams, scope=None, target_session=""):
     # Process step_result, accumulate stats, and write summary
     global_step, info["learning_rate"], step_summary = update_stats(
         stats, start_time, step_result)
-    summary_writer.add_summary(step_summary, global_step)
+
+    # For VI models, we have separate summaries for bilingual and monolingual
+    # batches.
+    if use_elbo:
+      if bi_step_summary:
+        summary_writer.add_summary(bi_step_summary, global_step)
+      if hparams.mono_prefix and mono_step_summary:
+        summary_writer.add_summary(mono_step_summary, global_step)
+    else:
+      summary_writer.add_summary(step_summary, global_step)
 
     # Once in a while, we print statistics.
     if global_step - last_stats_step >= steps_per_stats:
       last_stats_step = global_step
       is_overflow = process_stats(
-          stats, info, global_step, steps_per_stats, log_f)
+          stats, info, global_step, steps_per_stats, log_f,
+          calculate_ppl=(not use_elbo))
       print_step_info("  ", global_step, info, _get_best_results(hparams),
-                      log_f)
+                      log_f, use_elbo=use_elbo)
       if is_overflow:
         break
 
@@ -435,8 +480,9 @@ def train(hparams, scope=None, target_session=""):
     if global_step - last_eval_step >= steps_per_eval:
       last_eval_step = global_step
       utils.print_out("# Save eval, global step %d" % global_step)
-      utils.add_summary(summary_writer, global_step, "train_ppl",
-                        info["train_ppl"])
+      if not use_elbo:
+        utils.add_summary(summary_writer, global_step, "train_ppl",
+            info["train_ppl"])
 
       # Save checkpoint
       loaded_train_model.saver.save(
@@ -445,11 +491,10 @@ def train(hparams, scope=None, target_session=""):
           global_step=global_step)
 
       # Evaluate on dev/test
-      run_sample_decode(infer_model, infer_sess,
-                        model_dir, hparams, summary_writer, sample_src_data,
-                        sample_tgt_data)
-      run_internal_eval(
-          eval_model, eval_sess, model_dir, hparams, summary_writer)
+      run_sample_decode(infer_model, infer_sess, model_dir, hparams,
+          summary_writer, sample_src_data, sample_tgt_data)
+      run_internal_eval(eval_model, eval_sess, model_dir, hparams,
+          summary_writer, use_elbo=use_elbo)
 
     if global_step - last_external_eval_step >= steps_per_external_eval:
       last_external_eval_step = global_step
@@ -479,8 +524,10 @@ def train(hparams, scope=None, target_session=""):
   (result_summary, _, final_eval_metrics) = (
       run_full_eval(
           model_dir, infer_model, infer_sess, eval_model, eval_sess, hparams,
-          summary_writer, sample_src_data, sample_tgt_data, avg_ckpts))
-  print_step_info("# Final, ", global_step, info, result_summary, log_f)
+          summary_writer, sample_src_data, sample_tgt_data, avg_ckpts,
+          use_elbo=use_elbo))
+  print_step_info("# Final, ", global_step, info, result_summary, log_f,
+      use_elbo=use_elbo)
   utils.print_time("# Done training!", start_train_time)
 
   summary_writer.close()
@@ -492,9 +539,9 @@ def train(hparams, scope=None, target_session=""):
         os.path.join(best_model_dir, summary_name), infer_model.graph)
     result_summary, best_global_step, _ = run_full_eval(
         best_model_dir, infer_model, infer_sess, eval_model, eval_sess, hparams,
-        summary_writer, sample_src_data, sample_tgt_data)
+        summary_writer, sample_src_data, sample_tgt_data, use_elbo=use_elbo)
     print_step_info("# Best %s, " % metric, best_global_step, info,
-                    result_summary, log_f)
+                    result_summary, log_f, use_elbo=use_elbo)
     summary_writer.close()
 
     if avg_ckpts:
@@ -503,19 +550,21 @@ def train(hparams, scope=None, target_session=""):
           os.path.join(best_model_dir, summary_name), infer_model.graph)
       result_summary, best_global_step, _ = run_full_eval(
           best_model_dir, infer_model, infer_sess, eval_model, eval_sess,
-          hparams, summary_writer, sample_src_data, sample_tgt_data)
+          hparams, summary_writer, sample_src_data, sample_tgt_data,
+          use_elbo=use_elbo)
       print_step_info("# Averaged Best %s, " % metric, best_global_step, info,
-                      result_summary, log_f)
+                      result_summary, log_f, use_elbo=use_elbo)
       summary_writer.close()
 
   return final_eval_metrics, global_step
 
 
-def _format_results(name, ppl, scores, metrics):
+def _format_results(name, internal_score, scores, metrics, use_elbo=False):
   """Format results."""
   result_str = ""
-  if ppl:
-    result_str = "%s ppl %.2f" % (name, ppl)
+  internal_score_name = "elbo" if use_elbo else "ppl"
+  if internal_score:
+    result_str = "%s %s %.2f" % (name, internal_score_name, internal_score)
   if scores:
     for metric in metrics:
       if result_str:
@@ -534,12 +583,17 @@ def _get_best_results(hparams):
 
 
 def _internal_eval(model, global_step, sess, iterator, iterator_feed_dict,
-                   summary_writer, label):
+                   summary_writer, label, use_elbo=False):
   """Computing perplexity."""
   sess.run(iterator.initializer, feed_dict=iterator_feed_dict)
-  ppl = model_helper.compute_perplexity(model, sess, label)
-  utils.add_summary(summary_writer, global_step, "%s_ppl" % label, ppl)
-  return ppl
+  if use_elbo:
+    elbo = model_helper.compute_elbo(model, sess, label)
+    utils.add_summary(summary_writer, global_step, "%s_ELBO" % label, elbo)
+    return elbo
+  else:
+    ppl = model_helper.compute_perplexity(model, sess, label)
+    utils.add_summary(summary_writer, global_step, "%s_ppl" % label, ppl)
+    return ppl
 
 
 def _sample_decode(model, global_step, sess, hparams, iterator, src_data,

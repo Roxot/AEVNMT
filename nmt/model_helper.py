@@ -622,3 +622,28 @@ def compute_perplexity(model, sess, name):
   utils.print_time("  eval %s: perplexity %.2f" % (name, perplexity),
                    start_time)
   return perplexity
+
+def compute_elbo(model, sess, name):
+  """Compute the ELBO from the output of the model.
+
+  Args:
+    model: model for compute perplexity.
+    sess: tensorflow session to use.
+    name: name of the batch.
+
+  Returns:
+    The supervised ELBO of the eval outputs.
+  """
+  total_loss = 0
+  start_time = time.time()
+
+  while True:
+    try:
+      loss, _, batch_size = model.eval(sess)
+      total_loss += loss * batch_size
+    except tf.errors.OutOfRangeError:
+      break
+
+  elbo = -total_loss
+  utils.print_time("  eval %s: s-ELBO %.2f" % (name, elbo), start_time)
+  return elbo

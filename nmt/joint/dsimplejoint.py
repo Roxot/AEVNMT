@@ -64,7 +64,11 @@ class DSimpleJointModel(BaselineModel):
                            iterator.mono_text_length),
           false_fn=lambda: (iterator.target_input, iterator.target_output,
                             iterator.target_sequence_length))
-      self.batch_size = tf.size(self.target_sequence_length)
+
+      if self.mode != tf.contrib.learn.ModeKeys.INFER:
+        self.batch_size = tf.size(self.target_sequence_length)
+      else:
+        self.batch_size = tf.size(iterator.source_sequence_length)
 
       self.source, self.source_output, self.source_sequence_length = tf.cond(
           self.mono_batch,
@@ -74,6 +78,8 @@ class DSimpleJointModel(BaselineModel):
                             tf.one_hot(iterator.source_output, self.src_vocab_size,
                                        dtype=tf.float32),
                             iterator.source_sequence_length))
+
+
 
   # Overrides model.build_graph
   def build_graph(self, hparams, scope=None):

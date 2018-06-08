@@ -35,7 +35,7 @@ utils.check_tensorflow_version()
 
 FLAGS = None
 
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 def add_arguments(parser):
   """Build ArgumentParser."""

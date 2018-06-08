@@ -49,7 +49,10 @@ class DVAEJointModel(DSimpleJointModel):
 
       # Infer z from the embeddings
       Z = self._infer_z_from_embeddings(hparams)
-      z_sample = Z.sample()
+      if self.mode != tf.contrib.learn.ModeKeys.INFER:
+        z_sample = Z.sample()
+      else:
+        z_sample = Z.mean()
 
       with tf.variable_scope("generative_model", dtype=dtype):
 

@@ -213,6 +213,7 @@ def create_infer_model(model_creator, hparams, scope=None, extra_args=None):
         src_vocab_table,
         batch_size=batch_size_placeholder,
         eos=hparams.eos,
+        sos=hparams.sos,
         src_max_len=hparams.src_max_len_infer)
     model = model_creator(
         hparams,

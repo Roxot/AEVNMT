@@ -77,8 +77,10 @@ def get_mono_iterator(mono_txt_dataset, mono_len_dataset, vocab, sos_id,  eos_id
 def get_infer_iterator(src_dataset,
                        src_vocab_table,
                        batch_size,
+                       sos,
                        eos,
                        src_max_len=None):
+  src_sos_id = tf.cast(src_vocab_table.lookup(tf.constant(sos)), tf.int32)
   src_eos_id = tf.cast(src_vocab_table.lookup(tf.constant(eos)), tf.int32)
   src_dataset = src_dataset.map(lambda src: tf.string_split([src]).values)
 
@@ -87,6 +89,8 @@ def get_infer_iterator(src_dataset,
   # Convert the word strings to ids
   src_dataset = src_dataset.map(
       lambda src: tf.cast(src_vocab_table.lookup(src), tf.int32))
+  src_dataset = src_dataset.map(
+      lambda src: tf.concat(([src_sos_id], src,), 0))
   # Add in the word counts.
   src_dataset = src_dataset.map(lambda src: (src, tf.size(src)))
 

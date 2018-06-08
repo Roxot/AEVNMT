@@ -129,6 +129,7 @@ def create_test_iterator(hparams, mode):
             src_dataset=src_dataset,
             src_vocab_table=src_vocab_table,
             eos=hparams.eos,
+            sos=hparams.sos,
             batch_size=hparams.batch_size),
         src_vocab_table,
         tgt_vocab_table,

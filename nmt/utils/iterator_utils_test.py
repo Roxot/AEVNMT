@@ -289,6 +289,7 @@ class IteratorUtilsTest(tf.test.TestCase):
         src_vocab_table=src_vocab_table,
         batch_size=batch_size,
         eos=hparams.eos,
+        sos=hparams.sos,
         src_max_len=src_max_len)
     table_initializer = tf.tables_initializer()
     source = iterator.source

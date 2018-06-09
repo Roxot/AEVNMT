@@ -40,6 +40,48 @@ class DVAEJointModel(DSimpleJointModel):
           tf.summary.scalar("semi_supervised_KL_Z", self._KL_Z),
           tf.summary.scalar("semi_supervised_entropy", self._entropy)])
 
+  # Infers z from embeddings, using either fully or less amortized VI.
+  # Returns a sample (or the mean), and the latent variables themselves.
+  # If the amortization option is set to full, Z_bi and Z_mono will be
+  # identical.
+  def infer_z(self, hparams):
+
+    # Infer z from the embeddings
+    if hparams.z_inference_amortization == "full":
+      utils.print_out(" using fully amortized inference for inferring z")
+      Z = self._infer_z_from_embeddings(hparams, use_target=False)
+
+      # Either use a sample or the mean.
+      if self.mode != tf.contrib.learn.ModeKeys.INFER:
+        z_sample = Z.sample()
+      else:
+        z_sample = Z.mean()
+
+      Z_bi = Z
+      Z_mono = Z
+
+    elif hparams.z_inference_amortization == "less":
+      utils.print_out(" using less amortized inference for inferring z,"
+          " meaning we have separate inference networks for monolingual and"
+          " bilingual data.")
+      Z_mono = self._infer_z_from_embeddings(hparams,
+          scope_name="z_monolingual_inference_model", use_target=True)
+      Z_bi = self._infer_z_from_embeddings(hparams,
+          scope_name="z_bilingual_inference_model", use_target=False)
+
+      # Either use a sample or the mean.
+      if self.mode != tf.contrib.learn.ModeKeys.INFER:
+        z_sample = tf.cond(self.mono_batch,
+            true_fn=lambda: Z_mono.sample(),
+            false_fn=lambda: Z_bi.sample())
+      else:
+        z_sample = Z_bi.mean()
+    else:
+      raise ValueError("Unknown z inference amortization option:"
+          " %s" % hparams.z_inference_amortization)
+
+    return z_sample, Z_bi, Z_mono
+
   # Overrides model.build_graph
   def build_graph(self, hparams, scope=None):
     utils.print_out("# creating %s graph ..." % self.mode)
@@ -47,12 +89,7 @@ class DVAEJointModel(DSimpleJointModel):
 
     with tf.variable_scope(scope or "dynamic_seq2seq", dtype=dtype):
 
-      # Infer z from the embeddings
-      Z = self._infer_z_from_embeddings(hparams)
-      if self.mode != tf.contrib.learn.ModeKeys.INFER:
-        z_sample = Z.sample()
-      else:
-        z_sample = Z.mean()
+      z_sample, Z_bi, Z_mono = self.infer_z(hparams)
 
       with tf.variable_scope("generative_model", dtype=dtype):
 
@@ -71,7 +108,8 @@ class DVAEJointModel(DSimpleJointModel):
         if self.mode != tf.contrib.learn.ModeKeys.INFER:
           with tf.device(model_helper.get_device_str(self.num_encoder_layers - 1,
                                                      self.num_gpus)):
-            loss, components = self._compute_loss(tm_logits, lm_logits, Z)
+            loss, components = self._compute_loss(tm_logits, lm_logits,
+                Z_bi, Z_mono)
         else:
           loss = None
 
@@ -89,8 +127,9 @@ class DVAEJointModel(DSimpleJointModel):
 
     return tm_logits, loss, final_context_state, sample_id
 
-  def _infer_z_from_embeddings(self, hparams):
-    with tf.variable_scope("z_inference_model") as scope:
+  def _infer_z_from_embeddings(self, hparams, scope_name="z_inference_model",
+      use_target=False):
+    with tf.variable_scope(scope_name) as scope:
       dtype = scope.dtype
       num_layers = self.num_encoder_layers
       num_residual_layers = self.num_encoder_residual_layers
@@ -102,26 +141,60 @@ class DVAEJointModel(DSimpleJointModel):
       if self.time_major:
         embeddings = self._transpose_time_major(embeddings)
 
-      encoder_outputs, _ = (
-          self._build_bidirectional_rnn(inputs=embeddings,
-                                        sequence_length=self.source_sequence_length,
-                                        dtype=dtype,
-                                        hparams=hparams,
-                                        num_bi_layers=num_bi_layers,
-                                        num_bi_residual_layers=num_bi_residual_layers)
-                            )
+      with tf.variable_scope("source_sentence_encoder") as scope:
+        encoder_outputs, _ = (
+            self._build_bidirectional_rnn(inputs=embeddings,
+                                          sequence_length=self.source_sequence_length,
+                                          dtype=dtype,
+                                          hparams=hparams,
+                                          num_bi_layers=num_bi_layers,
+                                          num_bi_residual_layers=num_bi_residual_layers)
+                              )
 
-      # Average the transformed encoder outputs over the time dimension to
-      # get a single vector as input to the inference network for z.
-      # average_encoding: [batch, num_units]
-      max_source_time = self.get_max_time(encoder_outputs)
-      mask = tf.sequence_mask(self.source_sequence_length,
-          dtype=encoder_outputs.dtype, maxlen=max_source_time)
-      if self.time_major: mask = tf.transpose(mask)
-      mask = tf.tile(tf.expand_dims(mask, axis=-1), [1, 1, 2*hparams.num_units])
-      time_axis = 0 if self.time_major else 1
-      average_encoding = tf.reduce_mean(mask * encoder_outputs,
-          axis=time_axis)
+        # Average the transformed encoder outputs over the time dimension to
+        # get a single vector as input to the inference network for z.
+        # average_encoding: [batch, num_units]
+        max_source_time = self.get_max_time(encoder_outputs)
+        mask = tf.sequence_mask(self.source_sequence_length,
+            dtype=encoder_outputs.dtype, maxlen=max_source_time)
+        if self.time_major: mask = tf.transpose(mask)
+        mask = tf.tile(tf.expand_dims(mask, axis=-1), [1, 1, 2*hparams.num_units])
+        time_axis = 0 if self.time_major else 1
+        average_encoding = tf.reduce_mean(mask * encoder_outputs,
+            axis=time_axis)
+
+      # If set, also use the encoded target sequence for inferring z.
+      if use_target:
+        with tf.variable_scope("target_sentence_encoder") as scope:
+          tgt_embeddings = tf.stop_gradient(
+              tf.nn.embedding_lookup(self.embedding_decoder, self.target_input))
+          if self.time_major:
+            tgt_embeddings = self._transpose_time_major(tgt_embeddings)
+
+          tgt_encoder_outputs, _ = (
+              self._build_bidirectional_rnn(inputs=tgt_embeddings,
+                                            sequence_length=self.target_sequence_length,
+                                            dtype=dtype,
+                                            hparams=hparams,
+                                            num_bi_layers=num_bi_layers,
+                                            num_bi_residual_layers=num_bi_residual_layers)
+                                )
+
+          # Average the transformed encoder outputs over the time dimension to
+          # get a single vector as input to the inference network for z.
+          # average_encoding: [batch, num_units]
+          max_target_time = self.get_max_time(tgt_encoder_outputs)
+          tgt_mask = tf.sequence_mask(self.target_sequence_length,
+              dtype=tgt_encoder_outputs.dtype, maxlen=max_target_time)
+          if self.time_major: tgt_mask = tf.transpose(tgt_mask)
+          tgt_mask = tf.tile(tf.expand_dims(tgt_mask, axis=-1), [1, 1, 2*hparams.num_units])
+          time_axis = 0 if self.time_major else 1
+          average_tgt_encoding = tf.reduce_mean(tgt_mask * tgt_encoder_outputs,
+              axis=time_axis)
+
+        # Concatenate the source and target average encoders.
+        average_encoding = tf.concat([average_encoding, average_tgt_encoding],
+            axis=-1)
 
       # Use the averaged encoding to predict mu and sigma^2 in separate FFNNs.
       with tf.variable_scope("mean_inference_network"):
@@ -187,7 +260,7 @@ class DVAEJointModel(DSimpleJointModel):
     return tf.contrib.distributions.MultivariateNormalDiag(z_mu, z_sigma)
 
   # Overrides SimpleJointModel._compute_loss
-  def _compute_loss(self, tm_logits, lm_logits, Z):
+  def _compute_loss(self, tm_logits, lm_logits, Z_bi, Z_mono):
 
     # The cross-entropy under a reparameterizable sample of the latent variable(s).
     tm_loss = self._compute_categorical_loss(tm_logits,
@@ -211,8 +284,10 @@ class DVAEJointModel(DSimpleJointModel):
     # We compute an analytical KL between the Gaussian variational approximation
     # and its Gaussian prior.
     standard_normal = tf.contrib.distributions.MultivariateNormalDiag(
-        tf.zeros_like(Z.mean()), tf.ones_like(Z.stddev()))
-    KL_Z = Z.kl_divergence(standard_normal)
+        tf.zeros_like(Z_bi.mean()), tf.ones_like(Z_bi.stddev()))
+    KL_Z = tf.cond(self.mono_batch,
+        true_fn=lambda: Z_mono.kl_divergence(standard_normal),
+        false_fn=lambda: Z_bi.kl_divergence(standard_normal))
     KL_Z = tf.reduce_mean(KL_Z)
 
     return tm_loss + lm_loss + KL_Z - entropy, (tm_loss, lm_loss, KL_Z, entropy)

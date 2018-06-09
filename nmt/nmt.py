@@ -58,6 +58,10 @@ def add_arguments(parser):
   parser.add_argument("--check_convergence_every", type=int, default=0,
                       help="After the set number of steps, check for BLEU convergence"
                            " every x steps.")
+  parser.add_argument("--z_inference_amortization", type=str, default="full",
+                      help="Will use either a single or two inference networks "
+                           "for z, one for bilingual batches and one for "
+                           "monolingual batches: full|less")
 
   # network
   parser.add_argument("--num_units", type=int, default=32, help="Network size.")
@@ -318,6 +322,7 @@ def create_hparams(flags):
       Qx_decoder=flags.Qx_decoder,
       z_dim=flags.z_dim,
       check_convergence_every=flags.check_convergence_every,
+      z_inference_amortization=flags.z_inference_amortization,
 
       # Data
       src=flags.src,

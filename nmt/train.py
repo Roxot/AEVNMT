@@ -252,7 +252,6 @@ def process_stats(stats, info, global_step, steps_per_stats, log_f,
   info["avg_grad_norm"] = stats["grad_norm"] / steps_per_stats
   info["speed"] = stats["total_count"] / (1000 * stats["step_time"])
 
-  # TODO experimental
   is_overflow = False
   if calculate_ppl:
     info["train_ppl"] = utils.safe_exp(stats["loss"] / stats["predict_count"])
@@ -387,10 +386,18 @@ def train(hparams, scope=None, target_session=""):
   mono_step_summary, bi_step_summary = (None, None)
   train_feed_dict = {}
 
+  check_for_convergence = hparams.check_convergence_every > 0
+  checks_no_improvement = 0
+  best_dev_bleu = 0.
+  base_step = 0
+  if check_for_convergence and "bleu" not in hparams.metrics:
+      raise ValueError("Must include BLEU as a metric for convergence checking.")
+
   # This is the training loop.
   stats, info, start_train_time = before_train(
       loaded_train_model, train_model, train_sess, global_step, hparams, log_f)
-  while global_step < num_train_steps:
+  while global_step < num_train_steps or \
+      (check_for_convergence and checks_no_improvement < 20):
     ### Run a step ###
     start_time = time.time()
     try:
@@ -424,19 +431,30 @@ def train(hparams, scope=None, target_session=""):
         train_sess.run(train_model.iterator.mono_initializer)
         continue
 
-      # Finished going through the training dataset.  Go to next epoch.
-      hparams.epoch_step = 0
-      utils.print_out(
-          "# Finished an epoch, step %d. Perform external evaluation" %
-          global_step)
-      run_sample_decode(infer_model, infer_sess, model_dir, hparams,
-                        summary_writer, sample_src_data, sample_tgt_data)
-      run_external_eval(infer_model, infer_sess, model_dir, hparams,
-                        summary_writer)
+      # Don't do external evals if convergence checking.
+      if base_step > 0:
+        utils.print_out("# Finished an epoch, step %d." % global_step)
+      else:
 
-      if avg_ckpts:
-        run_avg_external_eval(infer_model, infer_sess, model_dir, hparams,
-                              summary_writer, global_step)
+        # Finished going through the training dataset.  Go to next epoch.
+        hparams.epoch_step = 0
+        utils.print_out(
+            "# Finished an epoch, step %d. Perform external evaluation" %
+            global_step)
+        run_sample_decode(infer_model, infer_sess, model_dir, hparams,
+                          summary_writer, sample_src_data, sample_tgt_data)
+        dev_scores, _, _ = run_external_eval(infer_model, infer_sess, model_dir, hparams,
+                          summary_writer)
+
+        # Keep track of best dev BLEU for convergence tracking.
+        if check_for_convergence:
+          bleu_score = dev_scores['bleu']
+          if bleu_score > best_dev_bleu:
+            best_dev_bleu = bleu_score
+
+        if avg_ckpts:
+          run_avg_external_eval(infer_model, infer_sess, model_dir, hparams,
+                                summary_writer, global_step)
 
       train_sess.run(
           train_model.iterator.initializer,
@@ -477,7 +495,54 @@ def train(hparams, scope=None, target_session=""):
       # Reset statistics
       stats = init_stats()
 
-    if global_step - last_eval_step >= steps_per_eval:
+    # In the last iteration, we need to start checking for convergence.
+    # Don't do other stats anymore except for the convergence ones.
+    if check_for_convergence and global_step == num_train_steps - 1:
+      utils.print_out("  start checking for convergence every %d steps,"
+                      " until no BLEU improvement has been found"
+                      " for 20 checks, current best dev BLEU: %f" % (
+                      hparams.check_convergence_every, best_dev_bleu))
+      base_step = global_step
+      continue
+
+    # Check for convergence every x steps.
+    if base_step > 0 and \
+        (global_step - base_step) % hparams.check_convergence_every == 0:
+
+      # Save checkpoint
+      loaded_train_model.saver.save(
+          train_sess,
+          os.path.join(out_dir, "translate.ckpt"),
+          global_step=global_step)
+
+      run_sample_decode(infer_model, infer_sess,
+                        model_dir, hparams, summary_writer, sample_src_data,
+                        sample_tgt_data)
+
+      dev_scores, _, _ = run_external_eval(
+          infer_model, infer_sess, model_dir,
+          hparams, summary_writer)
+
+      if avg_ckpts:
+        run_avg_external_eval(infer_model, infer_sess, model_dir, hparams,
+                              summary_writer, global_step)
+
+      # Check for dev BLEU improvement.
+      bleu_score = dev_scores['bleu']
+      if global_step == 119:
+        bleu_score += 0.1
+      if best_dev_bleu < bleu_score:
+        best_dev_bleu = bleu_score
+        checks_no_improvement = 0
+        utils.print_out("# convergence check: found new best dev BLEU score: "
+                        "%f" % best_dev_bleu)
+      else:
+        checks_no_improvement += 1
+        utils.print_out("# convergence check: found no improvement in "
+                        "dev BLEU score for %d checks" % checks_no_improvement)
+
+
+    if global_step - last_eval_step >= steps_per_eval and base_step == 0:
       last_eval_step = global_step
       utils.print_out("# Save eval, global step %d" % global_step)
       if not use_elbo:
@@ -496,7 +561,8 @@ def train(hparams, scope=None, target_session=""):
       run_internal_eval(eval_model, eval_sess, model_dir, hparams,
           summary_writer, use_elbo=use_elbo)
 
-    if global_step - last_external_eval_step >= steps_per_external_eval:
+    if global_step - last_external_eval_step >= steps_per_external_eval \
+        and base_step == 0:
       last_external_eval_step = global_step
 
       # Save checkpoint
@@ -507,9 +573,15 @@ def train(hparams, scope=None, target_session=""):
       run_sample_decode(infer_model, infer_sess,
                         model_dir, hparams, summary_writer, sample_src_data,
                         sample_tgt_data)
-      run_external_eval(
+      dev_scores, _, _ = run_external_eval(
           infer_model, infer_sess, model_dir,
           hparams, summary_writer)
+
+      # Keep track of best dev BLEU for convergence tracking.
+      if check_for_convergence:
+        bleu_score = dev_scores['bleu']
+        if bleu_score > best_dev_bleu:
+          best_dev_bleu = bleu_score
 
       if avg_ckpts:
         run_avg_external_eval(infer_model, infer_sess, model_dir, hparams,

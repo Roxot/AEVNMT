@@ -1,5 +1,6 @@
 {
   "joint_model_type": "baseline",
+  "check_convergence_every": 500,
   "attention": "scaled_luong",
   "attention_architecture": "standard",
   "batch_size": 64,

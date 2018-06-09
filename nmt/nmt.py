@@ -55,6 +55,9 @@ def add_arguments(parser):
   parser.add_argument("--Qx_decoder", type=str, default="diagonal",
                       help="Source inference model decoder type: diagonal|rnn")
   parser.add_argument("--z_dim", type=str, default=32, help="Dimensionality of z")
+  parser.add_argument("--check_convergence_every", type=int, default=0,
+                      help="After the set number of steps, check for BLEU convergence"
+                           " every x steps.")
 
   # network
   parser.add_argument("--num_units", type=int, default=32, help="Network size.")
@@ -314,6 +317,7 @@ def create_hparams(flags):
       Qx_encoder=flags.Qx_encoder,
       Qx_decoder=flags.Qx_decoder,
       z_dim=flags.z_dim,
+      check_convergence_every=flags.check_convergence_every,
 
       # Data
       src=flags.src,

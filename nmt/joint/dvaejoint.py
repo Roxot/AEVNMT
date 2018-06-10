@@ -57,9 +57,7 @@ class DVAEJointModel(DSimpleJointModel):
       else:
         z_sample = Z.mean()
 
-      Z_bi = Z
-      Z_mono = Z
-
+      return z_sample, Z
     elif hparams.z_inference_amortization == "less":
       utils.print_out(" using less amortized inference for inferring z,"
           " meaning we have separate inference networks for monolingual and"
@@ -76,11 +74,11 @@ class DVAEJointModel(DSimpleJointModel):
             false_fn=lambda: Z_bi.sample())
       else:
         z_sample = Z_bi.mean()
+
+      return z_sample, (Z_bi, Z_mono)
     else:
       raise ValueError("Unknown z inference amortization option:"
           " %s" % hparams.z_inference_amortization)
-
-    return z_sample, Z_bi, Z_mono
 
   # Overrides model.build_graph
   def build_graph(self, hparams, scope=None):
@@ -89,7 +87,7 @@ class DVAEJointModel(DSimpleJointModel):
 
     with tf.variable_scope(scope or "dynamic_seq2seq", dtype=dtype):
 
-      z_sample, Z_bi, Z_mono = self.infer_z(hparams)
+      z_sample, Z = self.infer_z(hparams)
 
       with tf.variable_scope("generative_model", dtype=dtype):
 
@@ -108,8 +106,9 @@ class DVAEJointModel(DSimpleJointModel):
         if self.mode != tf.contrib.learn.ModeKeys.INFER:
           with tf.device(model_helper.get_device_str(self.num_encoder_layers - 1,
                                                      self.num_gpus)):
+             
             loss, components = self._compute_loss(tm_logits, lm_logits,
-                Z_bi, Z_mono)
+                Z, less_amortized=(hparams.z_inference_amortization == "less"))
         else:
           loss = None
 
@@ -260,7 +259,7 @@ class DVAEJointModel(DSimpleJointModel):
     return tf.contrib.distributions.MultivariateNormalDiag(z_mu, z_sigma)
 
   # Overrides SimpleJointModel._compute_loss
-  def _compute_loss(self, tm_logits, lm_logits, Z_bi, Z_mono):
+  def _compute_loss(self, tm_logits, lm_logits, Z, less_amortized=False):
 
     # The cross-entropy under a reparameterizable sample of the latent variable(s).
     tm_loss = self._compute_categorical_loss(tm_logits,
@@ -283,11 +282,18 @@ class DVAEJointModel(DSimpleJointModel):
 
     # We compute an analytical KL between the Gaussian variational approximation
     # and its Gaussian prior.
-    standard_normal = tf.contrib.distributions.MultivariateNormalDiag(
-        tf.zeros_like(Z_bi.mean()), tf.ones_like(Z_bi.stddev()))
-    KL_Z = tf.cond(self.mono_batch,
-        true_fn=lambda: Z_mono.kl_divergence(standard_normal),
-        false_fn=lambda: Z_bi.kl_divergence(standard_normal))
+    if less_amortized:
+      Z_bi, Z_mono = Z
+      standard_normal = tf.contrib.distributions.MultivariateNormalDiag(
+          tf.zeros_like(Z_bi.mean()), tf.ones_like(Z_bi.stddev()))
+      KL_Z = tf.cond(self.mono_batch,
+          true_fn=lambda: Z_mono.kl_divergence(standard_normal),
+          false_fn=lambda: Z_bi.kl_divergence(standard_normal))
+    else:
+      standard_normal = tf.contrib.distributions.MultivariateNormalDiag(
+          tf.zeros_like(Z.mean()), tf.ones_like(Z.stddev()))
+      KL_Z = Z.kl_divergence(standard_normal)
+
     KL_Z = tf.reduce_mean(KL_Z)
 
     return tm_loss + lm_loss + KL_Z - entropy, (tm_loss, lm_loss, KL_Z, entropy)

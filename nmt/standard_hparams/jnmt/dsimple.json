@@ -4,6 +4,7 @@
   "Qx_encoder": "positional",
   "Qx_decoder": "diagonal",
   "check_convergence_every": 500,
+  "z_inference_amortization": "full",
   "attention": "scaled_luong",
   "attention_architecture": "standard",
   "batch_size": 64,

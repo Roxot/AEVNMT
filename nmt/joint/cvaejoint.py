@@ -47,7 +47,7 @@ class CVAEJointModel(CSimpleJointModel, DVAEJointModel):
 
     with tf.variable_scope(scope or "dynamic_seq2seq", dtype=dtype):
 
-      z_sample, Z_bi, Z_mono = self.infer_z(hparams)
+      z_sample, Z = self.infer_z(hparams)
 
       with tf.variable_scope("generative_model", dtype=dtype):
 
@@ -68,7 +68,7 @@ class CVAEJointModel(CSimpleJointModel, DVAEJointModel):
           with tf.device(model_helper.get_device_str(self.num_encoder_layers - 1,
                                                      self.num_gpus)):
             loss, components = self._compute_loss(tm_logits, gauss_observations,
-                Z_bi, Z_mono)
+                Z, less_amortized=(hparams.z_inference_amortization == "less"))
         else:
           loss = None
 
@@ -83,7 +83,7 @@ class CVAEJointModel(CSimpleJointModel, DVAEJointModel):
     return tm_logits, loss, final_context_state, sample_id
 
   # Overrides CSimpleJointModel._compute_loss
-  def _compute_loss(self, tm_logits, gauss_observations, Z_bi, Z_mono):
+  def _compute_loss(self, tm_logits, gauss_observations, Z, less_amortized=False):
 
     # - E_Qx[ E_qz[ log P(y_1^n | x_1^m, z) ] ]
     tm_loss = self._compute_categorical_loss(tm_logits,
@@ -95,11 +95,18 @@ class CVAEJointModel(CSimpleJointModel, DVAEJointModel):
 
     # We compute an analytical KL between the Gaussian variational approximation
     # and its standard Gaussian prior.
-    standard_normal = tf.contrib.distributions.MultivariateNormalDiag(
-        tf.zeros_like(Z_bi.mean()), tf.ones_like(Z_bi.stddev()))
-    KL_Z = tf.cond(self.mono_batch,
-        true_fn=lambda: Z_mono.kl_divergence(standard_normal),
-        false_fn=lambda: Z_bi.kl_divergence(standard_normal))
+    if less_amortized:
+      Z_bi, Z_mono = Z
+      standard_normal = tf.contrib.distributions.MultivariateNormalDiag(
+          tf.zeros_like(Z_bi.mean()), tf.ones_like(Z_bi.stddev()))
+      KL_Z = tf.cond(self.mono_batch,
+          true_fn=lambda: Z_mono.kl_divergence(standard_normal),
+          false_fn=lambda: Z_bi.kl_divergence(standard_normal))
+    else:
+      standard_normal = tf.contrib.distributions.MultivariateNormalDiag(
+          tf.zeros_like(Z.mean()), tf.ones_like(Z.stddev()))
+      KL_Z = Z.kl_divergence(standard_normal)
+
     KL_Z = tf.reduce_mean(KL_Z)
 
     # H(X|y_1^n) -- keep in mind self.Qx is defined in batch major, as are all

@@ -168,10 +168,27 @@ class CSimpleJointModel(DSimpleJointModel):
       # Use the attention output to predict a mean and a diagonal covariance
       # for X_i.
       mean = tf.layers.dense(attention_output, self.src_embed_size)
-      stddev = tf.layers.dense(attention_output, self.src_embed_size)
 
-      self.Qx = tf.contrib.distributions.MultivariateNormalDiag(loc=mean,
-          scale_diag=stddev)
+      if hparams.Qx_covariance == "diagonal":
+        stddev = tf.layers.dense(attention_output, self.src_embed_size)
+        self.Qx = tf.contrib.distributions.MultivariateNormalDiag(loc=mean,
+            scale_diag=stddev)
+      elif hparams.Qx_covariance == "full":
+
+        # Predict the cholesky factor.
+        cov_matrix_values = tf.layers.dense(attention_output,
+            self.src_embed_size * self.src_embed_size)
+        cov_matrix = tf.reshape(cov_matrix_values,
+            [self.batch_size, tf.reduce_max(predicted_source_length),
+            self.src_embed_size, self.src_embed_size])
+        cholesky = tf.contrib.distributions.matrix_diag_transform(cov_matrix,
+            transform=tf.nn.softplus)
+
+        self.Qx = tf.contrib.distributions.MultivariateNormalTriL(
+            loc=mean, scale_tril=cholesky)
+      else:
+        raise ValueError("Unknown value for Qx_covariance: %s" % \
+            hparams.Qx_covariance)
 
       return self.Qx.sample()
 
@@ -199,11 +216,20 @@ class CSimpleJointModel(DSimpleJointModel):
     # Create the Gaussian helper to generate Gaussian samples.
     helper = GaussianHelper(
         start_tokens=start_tokens,
-        decode_lengths=predicted_source_length)
+        decode_lengths=predicted_source_length,
+        full_covariance=(hparams.Qx_covariance == "full"))
     utils.print_out("  creating GaussianHelper")
 
     # Create the decoder.
-    projection_layer = tf.layers.Dense(self.src_embed_size * 2)
+    if hparams.Qx_covariance == "diagonal":
+      projection_layer_size = self.src_embed_size * 2
+    elif hparams.Qx_covariance == "full":
+      projection_layer_size = self.src_embed_size + \
+          self.src_embed_size * self.src_embed_size
+    else:
+      raise ValueError("Unknown value for Qx_covariance: %s" % \
+          hparams.Qx_covariance)
+    projection_layer = tf.layers.Dense(projection_layer_size)
     decoder = tf.contrib.seq2seq.BasicDecoder(cell, helper,
         decoder_init_state, output_layer=projection_layer)
 
@@ -225,8 +251,19 @@ class CSimpleJointModel(DSimpleJointModel):
       mean = self._transpose_time_major(mean)
       stddev = self._transpose_time_major(stddev)
 
-    self.Qx = tf.contrib.distributions.MultivariateNormalDiag(loc=mean,
-        scale_diag=stddev)
+    if hparams.Qx_covariance == "diagonal":
+      self.Qx = tf.contrib.distributions.MultivariateNormalDiag(loc=mean,
+          scale_diag=stddev)
+    else:
+
+      # Full covariance.
+      covariance = tf.reshape(stddev, [self.batch_size,
+          tf.reduce_max(predicted_source_length), self.src_embed_size,
+          self.src_embed_size])
+      cholesky = tf.contrib.distributions.matrix_diag_transform(covariance,
+          transform=tf.nn.softplus)
+      self.Qx = tf.contrib.distributions.MultivariateNormalTriL(
+          loc=mean, scale_tril=cholesky)
 
     return inferred_source
 

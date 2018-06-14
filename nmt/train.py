@@ -32,6 +32,7 @@ from . import model as nmt_model
 from . import model_helper
 from .utils import misc_utils as utils
 from .utils import nmt_utils
+from .utils.annealing import AnnealingSchedule
 
 utils.check_tensorflow_version()
 
@@ -386,6 +387,10 @@ def train(hparams, scope=None, target_session=""):
   mono_step_summary, bi_step_summary = (None, None)
   train_feed_dict = {}
 
+  if hparams.KL_annealing_steps > 0:
+    complexity_factor = AnnealingSchedule(initial=0., final=1.,
+        step=(1.0 / hparams.KL_annealing_steps))
+
   check_for_convergence = hparams.check_convergence_every > 0
   checks_no_improvement = 0
   best_dev_bleu = 0.
@@ -403,10 +408,15 @@ def train(hparams, scope=None, target_session=""):
     try:
 
       train_feed_dict[loaded_train_model.mono_batch] = monolingual_batch
+      if hparams.KL_annealing_steps > 0:
+        train_feed_dict[loaded_train_model.complexity_factor] = complexity_factor.alpha()
+
       step_result = loaded_train_model.train(train_sess, feed_dict=train_feed_dict)
       hparams.epoch_step += 1
       num_monolingual_batches += 1 if monolingual_batch else 0
       num_bilingual_batches += 1 if not monolingual_batch else 0
+
+      if hparams.KL_annealing_steps > 0: complexity_factor.update()
 
       # Keep track of bi- and monolingual ELBO & summaries separately for
       # VI models.
@@ -660,6 +670,9 @@ def _internal_eval(model, global_step, sess, iterator, iterator_feed_dict,
   sess.run(iterator.initializer, feed_dict=iterator_feed_dict)
   if use_elbo:
     elbo = model_helper.compute_elbo(model, sess, label)
+    if model.has_KL:
+      elbo, KL = elbo
+      utils.add_summary(summary_writer, global_step, "%s_KL" % label, KL)
     utils.add_summary(summary_writer, global_step, "%s_ELBO" % label, elbo)
     return elbo
   else:

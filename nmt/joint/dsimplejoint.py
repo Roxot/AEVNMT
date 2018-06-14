@@ -33,10 +33,10 @@ class DSimpleJointModel(BaselineModel):
     if self.mode == tf.contrib.learn.ModeKeys.TRAIN and not no_summaries:
       self.bi_summary = tf.summary.merge([
           self._base_summaries,
+          self._supervised_tm_accuracy_summary,
           tf.summary.scalar("supervised_ELBO", self._elbo),
           tf.summary.scalar("supervised_tm_loss", self._tm_loss),
           tf.summary.scalar("supervised_lm_loss", self._lm_loss),
-          tf.summary.scalar("supervised_tm_accuracy", self._tm_accuracy),
           tf.summary.scalar("supervised_lm_accuracy", self._lm_accuracy)])
       self.mono_summary = tf.summary.merge([
           self._base_summaries,

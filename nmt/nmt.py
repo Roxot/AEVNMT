@@ -65,6 +65,11 @@ def add_arguments(parser):
   parser.add_argument("--check_convergence_every", type=int, default=0,
                       help="After the set number of steps, check for BLEU convergence"
                            " every x steps.")
+  parser.add_argument("--word_dropout", type=float, default=0.,
+                      help="Dropout rate for words in the decoder.")
+  parser.add_argument("--KL_annealing_steps", type=int, default=0,
+                      help="Enables KL annealing from 0 to 1 over a given "
+                           "number of steps")
 
   # network
   parser.add_argument("--num_units", type=int, default=32, help="Network size.")
@@ -327,6 +332,8 @@ def create_hparams(flags):
       z_dim=flags.z_dim,
       z_inference_amortization=flags.z_inference_amortization,
       check_convergence_every=flags.check_convergence_every,
+      word_dropout=flags.word_dropout,
+      KL_annealing_steps=flags.KL_annealing_steps,
 
       # Data
       src=flags.src,

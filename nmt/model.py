@@ -60,6 +60,7 @@ class BaseModel(object):
       extra_args: model_helper.ExtraArgs, for passing customizable functions.
     """
     self.supports_monolingual = False
+    self.has_KL = False
     self.mode = mode
     self.src_vocab_table = source_vocab_table
     self.tgt_vocab_table = target_vocab_table

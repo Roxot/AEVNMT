@@ -15,17 +15,23 @@ class CVAEJointModel(CSimpleJointModel, DVAEJointModel):
                target_vocab_table, reverse_target_vocab_table=None,
                scope=None, extra_args=None, no_summaries=False):
 
+    # Create the complexity factor for the KL. This way its value can be
+    # overriden in a feed dict during runtime.
+    self.complexity_factor = tf.constant(1.0)
+
     super(CVAEJointModel, self).__init__(hparams=hparams, mode=mode,
         iterator=iterator, source_vocab_table=source_vocab_table,
         target_vocab_table=target_vocab_table,
         reverse_target_vocab_table=reverse_target_vocab_table,
         scope=scope, extra_args=extra_args, no_summaries=True)
 
+    self.has_KL = True
+
     # Set model specific training summaries.
     if self.mode == tf.contrib.learn.ModeKeys.TRAIN and not no_summaries:
       self.bi_summary = tf.summary.merge([
           self._base_summaries,
-          tf.summary.scalar("supervised_tm_accuracy", self._tm_accuracy),
+          self._supervised_tm_accuracy_summary,
           tf.summary.scalar("supervised_ELBO", self._elbo),
           tf.summary.scalar("supervised_tm_loss", self._tm_loss),
           tf.summary.scalar("supervised_lm_loss", self._lm_loss),
@@ -39,6 +45,11 @@ class CVAEJointModel(CSimpleJointModel, DVAEJointModel):
           tf.summary.scalar("semi_supervised_KL_Z", self._KL_Z),
           tf.summary.scalar("semi_supervised_entropy", self._entropy)])
 
+  # Overrides Model.eval
+  def eval(self, sess):
+    assert self.mode == tf.contrib.learn.ModeKeys.EVAL
+    return sess.run([self.eval_loss,
+        self.KL, self.predict_count, self.batch_size])
 
   # Overrides CSimpleJointModel.build_graph
   def build_graph(self, hparams, scope=None):
@@ -115,4 +126,6 @@ class CVAEJointModel(CSimpleJointModel, DVAEJointModel):
         true_fn=lambda: tf.reduce_mean(tf.reduce_sum(self.Qx.entropy(), axis=1)),
         false_fn=lambda: tf.constant(0.))
 
-    return tm_loss + lm_loss + KL_Z - entropy, (tm_loss, lm_loss, KL_Z, entropy)
+    self.KL = KL_Z
+
+    return tm_loss + lm_loss + self.complexity_factor * KL_Z - entropy, (tm_loss, lm_loss, KL_Z, entropy)

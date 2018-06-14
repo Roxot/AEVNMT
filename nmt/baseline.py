@@ -37,10 +37,13 @@ class BaselineModel(AttentionModel):
           self._lr_summary,
           ] + self._grad_norm_summary)
 
+      self._supervised_tm_accuracy_summary =  tf.summary.scalar(
+          "supervised_tm_accuracy", tm_accuracy),
+
       # Also add the tm accuracy summary to the baseline's summaries.
       self.train_summary = tf.summary.merge([
           self.train_summary,
-          tf.summary.scalar("supervised_tm_accuracy", tm_accuracy)])
+          self._supervised_tm_accuracy_summary])
 
       # Allows for different summaries for monolingual and bilingual batches.
       self.mono_summary = self.train_summary
@@ -240,6 +243,16 @@ class BaselineModel(AttentionModel):
           target_input = tf.transpose(target_input)
         decoder_emb_inp = tf.nn.embedding_lookup(
             self.embedding_decoder, target_input)
+
+        # Apply word dropout if set.
+        if hparams.word_dropout > 0 and \
+            (self.mode == tf.contrib.learn.ModeKeys.TRAIN):
+
+          # Drop random words.
+          noise_shape = [tf.shape(decoder_emb_inp)[0],
+              tf.shape(decoder_emb_inp)[1], 1]
+          decoder_emb_inp = tf.nn.dropout(decoder_emb_inp,
+              (1.0 - hparams.word_dropout), noise_shape=noise_shape)
 
         # Helper
         helper = tf.contrib.seq2seq.TrainingHelper(

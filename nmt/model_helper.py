@@ -633,18 +633,34 @@ def compute_elbo(model, sess, name):
     name: name of the batch.
 
   Returns:
-    The supervised ELBO of the eval outputs.
+    The supervised ELBO of the eval outputs. If the model has a KL will return
+    a tuple (ELBO, KL).
   """
   total_loss = 0
+  total_KL = 0
+  total_steps = 0
   start_time = time.time()
 
   while True:
     try:
-      loss, _, batch_size = model.eval(sess)
+      if model.has_KL:
+        loss, KL, _, batch_size = model.eval(sess)
+        total_KL += KL * batch_size
+        total_steps += batch_size
+      else:
+        loss, _, batch_size = model.eval(sess)
+
       total_loss += loss * batch_size
     except tf.errors.OutOfRangeError:
       break
 
   elbo = -total_loss
-  utils.print_time("  eval %s: s-ELBO %.2f" % (name, elbo), start_time)
-  return elbo
+
+  if model.has_KL:
+    avg_KL = total_KL / total_steps
+    utils.print_time("  eval %s: s-ELBO %.2f KL %.2f" % \
+        (name, elbo, avg_KL), start_time)
+    return (elbo, avg_KL)
+  else:
+    utils.print_time("  eval %s: s-ELBO %.2f" % (name, elbo), start_time)
+    return elbo

@@ -276,12 +276,16 @@ def _create_pretrained_emb_from_txt(
 def _create_or_load_embed(embed_name, vocab_file, embed_file,
                           vocab_size, embed_size, dtype):
   """Create a new or load an existing embedding matrix."""
+  stddev = 0.5
+  utils.print_out("  initializing normal embeddings with N(0, %.2f)" % stddev)
+  initializer = tf.random_normal_initializer(mean=0.0, stddev=stddev)
   if vocab_file and embed_file:
     embedding = _create_pretrained_emb_from_txt(vocab_file, embed_file)
   else:
     with tf.device(_get_embed_device(vocab_size)):
+      utils.print_out("  emb mean: %f stddev: %f" % (initializer.mean, initializer.stddev))
       embedding = tf.get_variable(
-          embed_name, [vocab_size, embed_size], dtype)
+          embed_name, shape=[vocab_size, embed_size], dtype=dtype, initializer=initializer)
   return embedding
 
 

@@ -90,9 +90,9 @@ class BaseModel(object):
       self.num_decoder_residual_layers = hparams.num_decoder_residual_layers
 
     # Initializer
-    initializer = model_helper.get_initializer(
-        hparams.init_op, hparams.random_seed, hparams.init_weight)
-    tf.get_variable_scope().set_initializer(initializer)
+    # initializer = model_helper.get_initializer(
+    #     hparams.init_op, hparams.random_seed, hparams.init_weight)
+    # tf.get_variable_scope().set_initializer(initializer)
 
     # Embeddings
     self.init_embeddings(hparams, scope)

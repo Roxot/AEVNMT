@@ -313,6 +313,5 @@ class DVAEJointModel(DSimpleJointModel):
     KL_Z = tf.reduce_mean(KL_Z)
     self.KL = KL_Z
 
-    KL_Z = tf.Print(KL_Z, [self.KL])
     return tm_loss + lm_loss + self.complexity_factor * KL_Z - entropy, \
         (tm_loss, lm_loss, KL_Z, entropy)

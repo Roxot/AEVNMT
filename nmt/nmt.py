@@ -44,8 +44,8 @@ def add_arguments(parser):
   # joint nmt parameters
   parser.add_argument("--joint_model_type", type=str, default=None,
                       help="If set use the specified joint model:"
-                      " baseline|dsimple|dvae|csimple|cvae")
-  parser.add_argument("--num_lm_layers", type=int, default=None,
+                      " baseline|cbaseline|dsimple|dvae|csimple|cvae")
+  parser.add_argument("--num_lm_layers", type=int, default=1,
                       help="Language model depth,"
                       " equal to num_decoder_layers if None.")
   parser.add_argument("--mono_prefix", type=str, default=None,
@@ -323,8 +323,7 @@ def create_hparams(flags):
   return tf.contrib.training.HParams(
       # Joint model parameters
       joint_model_type=flags.joint_model_type,
-      num_lm_layers=(flags.num_lm_layers or flags.num_decoder_layers or \
-          flags.num_layers),
+      num_lm_layers=flags.num_lm_layers,
       mono_prefix=flags.mono_prefix,
       Qx_encoder=flags.Qx_encoder,
       Qx_decoder=flags.Qx_decoder,

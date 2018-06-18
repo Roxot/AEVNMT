@@ -25,6 +25,7 @@ import tensorflow as tf
 import nmt.joint as joint
 
 from .baseline import BaselineModel
+from .cbaseline import CBaselineModel
 from . import attention_model
 from . import gnmt_model
 from . import inference
@@ -310,6 +311,8 @@ def train(hparams, scope=None, target_session=""):
   else:  # Attention
     if hparams.joint_model_type == "baseline":
       model_creator = BaselineModel
+    elif hparams.joint_model_type == "cbaseline":
+      model_creator = CBaselineModel
     elif hparams.joint_model_type == "dsimple":
       model_creator = joint.DSimpleJointModel
     elif hparams.joint_model_type == "dvae":
@@ -369,7 +372,8 @@ def train(hparams, scope=None, target_session=""):
 
   # For joint models we log the elbo instead of the ppl.
   use_elbo = hparams.joint_model_type is not None and \
-      hparams.joint_model_type != "baseline"
+      hparams.joint_model_type != "baseline" and \
+      hparams.joint_model_type != "cbaseline"
 
   # First evaluation
   run_full_eval(

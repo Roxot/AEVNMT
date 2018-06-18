@@ -24,6 +24,7 @@ import tensorflow as tf
 import nmt.joint as joint
 
 from .baseline import BaselineModel
+from .cbaseline import CBaselineModel
 from . import attention_model
 from . import gnmt_model
 from . import model as nmt_model
@@ -98,6 +99,8 @@ def inference(ckpt,
     model_creator = nmt_model.Model
   elif hparams.joint_model_type == "baseline":
     model_creator = BaselineModel
+  elif hparams.joint_model_type == "cbaseline":
+    model_creator = CBaselineModel
   elif hparams.joint_model_type == "dsimple":
     model_creator = joint.DSimpleJoint
   elif hparams.joint_model_type == "dvae":

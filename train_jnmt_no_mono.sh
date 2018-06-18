@@ -33,7 +33,7 @@ python -m nmt.nmt \
     --dev_prefix=../data/${SRC}-${TGT}/dev \
     --embed_prefix=${EMBED} \
     --hparams_path=${HPARAMS} \
-    &> ${OUTPUT_DIR}/log &
+    # &> ${OUTPUT_DIR}/log &
 
 echo "Using config: ${HPARAMS}"
 echo "You can check the logfile using:"

@@ -37,5 +37,6 @@
   "time_major": true,
   "unit_type": "gru",
   "beam_width": 10,
-  "pass_hidden_state": false
+  "pass_hidden_state": false,
+  "length_penalty_weight": 1.0
 }

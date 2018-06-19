@@ -241,7 +241,7 @@ def _get_embed_device(vocab_size):
 
 
 def _create_pretrained_emb_from_txt(
-    vocab_file, embed_file, num_trainable_tokens=3, dtype=tf.float32,
+    vocab_file, embed_file, num_trainable_tokens=0, dtype=tf.float32,
     scope=None):
   """Load pretrain embeding from embed_file, and return an embedding matrix.
 

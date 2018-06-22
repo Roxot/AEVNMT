@@ -31,6 +31,16 @@ def language_model(embeddings, sequence_length, hparams, mode, single_cell_fn,
       utils.print_out("  initializing generative LM with zeros.")
       init_state = cell.zero_state(batch_size, scope.dtype)
 
+    # Apply word dropout if set.
+    if hparams.word_dropout > 0 and \
+        (mode == tf.contrib.learn.ModeKeys.TRAIN):
+
+      # Drop random words.
+      noise_shape = [tf.shape(embeddings)[0],
+          tf.shape(embeddings)[1], 1]
+      embeddings = tf.nn.dropout(embeddings,
+          (1.0 - hparams.word_dropout), noise_shape=noise_shape)
+
     # Run the RNN language model.
     helper = tf.contrib.seq2seq.TrainingHelper(
         embeddings,

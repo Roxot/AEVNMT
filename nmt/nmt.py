@@ -70,6 +70,9 @@ def add_arguments(parser):
   parser.add_argument("--KL_annealing_steps", type=int, default=0,
                       help="Enables KL annealing from 0 to 1 over a given "
                            "number of steps")
+  parser.add_argument("--synthetic_prefix", type=str, default=None,
+                      help="Prefix for synthetic data files: <prefix>.<tgt>"
+                            " / <prefix>.translation.<src>")
 
   # network
   parser.add_argument("--num_units", type=int, default=32, help="Network size.")
@@ -333,6 +336,7 @@ def create_hparams(flags):
       check_convergence_every=flags.check_convergence_every,
       word_dropout=flags.word_dropout,
       KL_annealing_steps=flags.KL_annealing_steps,
+      synthetic_prefix=flags.synthetic_prefix,
 
       # Data
       src=flags.src,

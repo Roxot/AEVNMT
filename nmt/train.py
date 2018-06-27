@@ -435,7 +435,7 @@ def train(hparams, scope=None, target_session=""):
 
       # Switch between bilingual and monolingual batches if monolingual data
       # is given.
-      if hparams.mono_prefix:
+      if hparams.mono_prefix or hparams.synthetic_prefix:
         monolingual_batch = not monolingual_batch
     except tf.errors.OutOfRangeError:
 

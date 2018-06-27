@@ -83,7 +83,11 @@ def create_train_model(
     tgt_dataset = tf.data.TextLineDataset(tgt_file)
     skip_count_placeholder = tf.placeholder(shape=(), dtype=tf.int64)
 
+    if hparams.mono_prefix is not None and hparams.synthetic_prefix is not None:
+      raise ValueError("Cannot both have mono_prefix and synthetic_prefix set.")
+
     mono_datasets = None
+    synth_datasets = None
     if hparams.mono_prefix is not None:
       mono_batch = tf.placeholder(tf.bool, name="mono_batch_placeholder")
       mono_file_txt = "%s.%s.txt" % (hparams.mono_prefix, hparams.tgt)
@@ -91,6 +95,18 @@ def create_train_model(
       mono_txt_dataset = tf.data.TextLineDataset(mono_file_txt)
       pred_src_len_dataset = tf.data.TextLineDataset(mono_file_len)
       mono_datasets = (mono_txt_dataset, pred_src_len_dataset)
+      utils.print_out("  loading monolingual data along with length predictions"
+                      " from %s and %s" % (mono_file_txt, mono_file_len))
+    elif hparams.synthetic_prefix is not None:
+      mono_batch = tf.placeholder(tf.bool, name="synth_batch_placeholder")
+      synth_file_src = "%s.translation.%s" % (hparams.synthetic_prefix,
+          hparams.src)
+      synth_file_tgt = "%s.%s" % (hparams.synthetic_prefix, hparams.tgt)
+      synth_src_dataset = tf.data.TextLineDataset(synth_file_src)
+      synth_tgt_dataset = tf.data.TextLineDataset(synth_file_tgt)
+      synth_datasets = (synth_src_dataset, synth_tgt_dataset)
+      utils.print_out("  loading synthetic back-translated data from %s"
+                      " and %s" % (synth_file_src, synth_file_tgt))
     else:
       mono_batch = tf.constant(False)
 
@@ -110,6 +126,7 @@ def create_train_model(
         num_shards=num_workers,
         shard_index=jobid,
         mono_datasets=mono_datasets,
+        synth_datasets=synth_datasets,
         mono_batch=mono_batch)
 
     # Note: One can set model_device_fn to

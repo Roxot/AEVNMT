@@ -128,7 +128,7 @@ def get_infer_iterator(src_dataset,
       predicted_source_length=tf.ones([1], dtype=tf.int32),
       mono_batch=tf.constant(False))
 
-def get_iterator(src_dataset,
+def _get_bilingual_iterator(src_dataset,
                  tgt_dataset,
                  src_vocab_table,
                  tgt_vocab_table,
@@ -137,18 +137,14 @@ def get_iterator(src_dataset,
                  eos,
                  random_seed,
                  num_buckets,
-                 src_max_len=None,
-                 tgt_max_len=None,
-                 num_parallel_calls=4,
-                 output_buffer_size=None,
-                 skip_count=None,
-                 num_shards=1,
-                 shard_index=0,
-                 reshuffle_each_iteration=True,
-                 mono_datasets=None,
-                 mono_batch=tf.constant(False)):
-  if not output_buffer_size:
-    output_buffer_size = batch_size * 1000
+                 src_max_len,
+                 tgt_max_len,
+                 num_parallel_calls,
+                 output_buffer_size,
+                 skip_count,
+                 num_shards,
+                 shard_index,
+                 reshuffle_each_iteration):
   src_eos_id = tf.cast(src_vocab_table.lookup(tf.constant(eos)), tf.int32)
   src_sos_id = tf.cast(src_vocab_table.lookup(tf.constant(sos)), tf.int32)
   tgt_sos_id = tf.cast(tgt_vocab_table.lookup(tf.constant(sos)), tf.int32)
@@ -251,9 +247,42 @@ def get_iterator(src_dataset,
   else:
     batched_dataset = batching_func(src_tgt_dataset)
   bilingual_iterator = batched_dataset.make_initializable_iterator()
+  return bilingual_iterator
+
+def get_iterator(src_dataset,
+                 tgt_dataset,
+                 src_vocab_table,
+                 tgt_vocab_table,
+                 batch_size,
+                 sos,
+                 eos,
+                 random_seed,
+                 num_buckets,
+                 src_max_len=None,
+                 tgt_max_len=None,
+                 num_parallel_calls=4,
+                 output_buffer_size=None,
+                 skip_count=None,
+                 num_shards=1,
+                 shard_index=0,
+                 reshuffle_each_iteration=True,
+                 mono_datasets=None,
+                 synth_datasets=None,
+                 mono_batch=tf.constant(False)):
+
+  if not output_buffer_size:
+    output_buffer_size = batch_size * 1000
+
+  bilingual_iterator = _get_bilingual_iterator(src_dataset, tgt_dataset,
+    src_vocab_table, tgt_vocab_table, batch_size, sos, eos, random_seed,
+    num_buckets, src_max_len, tgt_max_len, num_parallel_calls,
+    output_buffer_size, skip_count, num_shards, shard_index,
+    reshuffle_each_iteration)
 
   # Load monolingual data if given.
   if mono_datasets:
+    tgt_sos_id = tf.cast(tgt_vocab_table.lookup(tf.constant(sos)), tf.int32)
+    tgt_eos_id = tf.cast(tgt_vocab_table.lookup(tf.constant(eos)), tf.int32)
     mono_iterator = get_mono_iterator(mono_datasets[0], mono_datasets[1],
         tgt_vocab_table, tgt_sos_id, tgt_eos_id, output_buffer_size, batch_size,
         random_seed=random_seed, num_threads=num_parallel_calls)
@@ -276,17 +305,33 @@ def get_iterator(src_dataset,
          tf.ones([batch_size], dtype=tf.int32))    # pred_src_len
     mono_initializer = None
 
-  # If a monolingual batch, just give a batch of zeros for the bilingual data.
-  (src_input_ids, src_output_ids, tgt_input_ids, tgt_output_ids, \
-      src_seq_len, tgt_seq_len) = tf.cond(mono_batch,
-          true_fn=lambda: (
-                   tf.zeros([batch_size, 1], dtype=tf.int32), # src
-                   tf.zeros([batch_size, 1], dtype=tf.int32), # src_output
-                   tf.zeros([batch_size, 1], dtype=tf.int32), # tgt_input
-                   tf.zeros([batch_size, 1], dtype=tf.int32), # tgt_output
-                   tf.ones([batch_size], dtype=tf.int32),     # src_len
-                   tf.ones([batch_size], dtype=tf.int32)),    # tgt_len
-          false_fn=lambda: bilingual_iterator.get_next())
+  # Load synthetic back-translated data if given.
+  if synth_datasets:
+    synth_src_dataset, synth_tgt_dataset = synth_datasets
+    synth_iterator = _get_bilingual_iterator(synth_src_dataset,
+      synth_tgt_dataset, src_vocab_table, tgt_vocab_table, batch_size,
+      sos, eos, random_seed, num_buckets, src_max_len, tgt_max_len,
+      num_parallel_calls, output_buffer_size, None, num_shards,
+      shard_index, reshuffle_each_iteration)
+
+    (src_input_ids, src_output_ids, tgt_input_ids, tgt_output_ids, \
+        src_seq_len, tgt_seq_len) = tf.cond(mono_batch,
+            true_fn=lambda: synth_iterator.get_next(),
+            false_fn=lambda: bilingual_iterator.get_next())
+    mono_initializer = synth_iterator.initializer
+  else:
+
+    # If a monolingual batch, just give a batch of zeros for the bilingual data.
+    (src_input_ids, src_output_ids, tgt_input_ids, tgt_output_ids, \
+        src_seq_len, tgt_seq_len) = tf.cond(mono_batch,
+            true_fn=lambda: (
+                     tf.zeros([batch_size, 1], dtype=tf.int32), # src
+                     tf.zeros([batch_size, 1], dtype=tf.int32), # src_output
+                     tf.zeros([batch_size, 1], dtype=tf.int32), # tgt_input
+                     tf.zeros([batch_size, 1], dtype=tf.int32), # tgt_output
+                     tf.ones([batch_size], dtype=tf.int32),     # src_len
+                     tf.ones([batch_size], dtype=tf.int32)),    # tgt_len
+            false_fn=lambda: bilingual_iterator.get_next())
 
   return BatchedInput(
       initializer=bilingual_iterator.initializer,

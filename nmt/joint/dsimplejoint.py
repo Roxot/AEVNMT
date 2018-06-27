@@ -19,6 +19,9 @@ class DSimpleJointModel(BaselineModel):
                target_vocab_table, reverse_target_vocab_table=None,
                scope=None, extra_args=None, no_summaries=False):
 
+    # Currently here just for consistency because Q(X) uses GRU cells.
+    assert hparams.unit_type == "gru"
+
     self.gumbel = Gumbel()
 
     super(DSimpleJointModel, self).__init__(hparams=hparams, mode=mode,
@@ -173,44 +176,55 @@ class DSimpleJointModel(BaselineModel):
     return encoder_outputs
 
   def _birnn_encoder(self, target, target_length, hparams):
-    scope = tf.get_variable_scope()
-    dtype = scope.dtype
-    num_layers = self.num_encoder_layers
-    num_residual_layers = self.num_encoder_residual_layers
-    num_bi_layers = int(num_layers / 2)
-    num_bi_residual_layers = int(num_residual_layers / 2)
+
+    # [batch, time, num_units]
+    embeddings = tf.nn.embedding_lookup(
+        tf.stop_gradient(self.embedding_decoder), target)
 
     if self.time_major:
-      target = self._transpose_time_major(target)
+      embeddings = self._transpose_time_major(embeddings)
 
-    # Embed the target sentence with the decoder embedding matrix.
-    # We use the generative embedding matrix, but stop gradients from
-    # flowing through.
-    embeddings = tf.nn.embedding_lookup(tf.stop_gradient(self.embedding_decoder),
-        target)
+    fw_cell = tf.contrib.rnn.GRUCell(hparams.num_units)
+    bw_cell = tf.contrib.rnn.GRUCell(hparams.num_units)
 
-    encoder_outputs, bi_encoder_state = (
-        self._build_bidirectional_rnn(inputs=embeddings,
-                                      sequence_length=target_length,
-                                      dtype=dtype,
-                                      hparams=hparams,
-                                      num_bi_layers=num_bi_layers,
-                                      num_bi_residual_layers=num_bi_residual_layers))
+    encoder_outputs, final_state = tf.nn.bidirectional_dynamic_rnn(
+        fw_cell,
+        bw_cell,
+        embeddings,
+        sequence_length=target_length,
+        time_major=self.time_major,
+        dtype=embeddings.dtype)
 
-    if num_bi_layers == 1:
-      encoder_state = bi_encoder_state
-    else:
-      encoder_state = []
-      for layer_id in range(num_bi_layers):
-        encoder_state.append(bi_encoder_state[0][layer_id])  # forward
-        encoder_state.append(bi_encoder_state[1][layer_id])  # backward
-      encoder_state = tuple(encoder_state)
+    final_state = tf.concat(final_state, axis=-1)
+    encoder_outputs = tf.concat(encoder_outputs, axis=-1)
 
-    # Return output in batch major.
     if self.time_major:
       encoder_outputs = self._transpose_time_major(encoder_outputs)
 
-    return encoder_outputs, encoder_state
+    return encoder_outputs, final_state
+
+  def _sutskever_encoder(self, target, target_length, hparams):
+
+    reverse_target = tf.reverse(target, axis=[-1])
+
+    # [batch, time, num_units]
+    embeddings = tf.nn.embedding_lookup(
+        tf.stop_gradient(self.embedding_decoder), reverse_target)
+
+    if self.time_major:
+      embeddings = self._transpose_time_major(embeddings)
+
+    cell = tf.contrib.rnn.GRUCell(hparams.num_units)
+
+    encoder_outputs, final_state = tf.nn.dynamic_rnn(cell, embeddings,
+        sequence_length=target_length,
+        time_major=self.time_major,
+        dtype=embeddings.dtype)
+
+    if self.time_major:
+      encoder_outputs = self._transpose_time_major(encoder_outputs)
+
+    return encoder_outputs, final_state
 
   def _diagonal_decoder(self, encoder_outputs, target_length,
                         predicted_source_length, hparams):
@@ -237,6 +251,33 @@ class DSimpleJointModel(BaselineModel):
     # Project the attention output to the vocabulary size to obtain the
     # Gumbel parameters.
     logits = tf.layers.dense(attention_output, self.src_vocab_size)
+    std_gumbel_sample = self.gumbel.random_standard(tf.shape(logits))
+    inferred_source = tf.nn.softmax(logits + std_gumbel_sample)
+
+    return inferred_source
+
+  def _deterministic_rnn_decoder(self, encoder_outputs, final_state,
+      target_length, predicted_source_length, hparams):
+
+    max_source_length = tf.reduce_max(predicted_source_length)
+    inputs = tf.tile(tf.expand_dims(final_state, 1),
+        [1, max_source_length, 1])
+    inputs = enrich_embeddings_with_positions(inputs,
+        hparams.num_units, "positional_embeddings")
+    if self.time_major:
+      inputs = self._transpose_time_major(inputs)
+
+    cell = tf.contrib.rnn.GRUCell(hparams.num_units)
+    decoder_outputs, _ = tf.nn.dynamic_rnn(cell, inputs,
+        sequence_length=predicted_source_length,
+        time_major=self.time_major,
+        dtype=inputs.dtype)
+
+    # Return batch major.
+    if self.time_major:
+      decoder_outputs = self._transpose_time_major(decoder_outputs)
+
+    logits = tf.layers.dense(decoder_outputs, self.src_vocab_size)
     std_gumbel_sample = self.gumbel.random_standard(tf.shape(logits))
     inferred_source = tf.nn.softmax(logits + std_gumbel_sample)
 
@@ -309,6 +350,9 @@ class DSimpleJointModel(BaselineModel):
         elif hparams.Qx_encoder == "birnn":
           encoder_outputs, encoder_state = self._birnn_encoder(target,
               target_length, hparams)
+        elif hparams.Qx_encoder == "sutskever":
+          encoder_outputs, encoder_state = self._sutskever_encoder(target,
+              target_length, hparams)
         else:
           raise ValueError("Unknown Qx_encoder type: %s" % hparams.Qx_encoder)
 
@@ -320,6 +364,9 @@ class DSimpleJointModel(BaselineModel):
         elif hparams.Qx_decoder == "rnn":
           inferred_source = self._rnn_decoder(encoder_outputs, encoder_state,
               target_length, predicted_source_length, hparams)
+        elif hparams.Qx_decoder == "det_rnn":
+          inferred_source = self._deterministic_rnn_decoder(encoder_outputs,
+              encoder_state, target_length, predicted_source_length, hparams)
         else:
           raise ValueError("Unknown Qx_decoder type: %s" % hparams.Qx_decoder)
 

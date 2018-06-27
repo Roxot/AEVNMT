@@ -51,9 +51,9 @@ def add_arguments(parser):
   parser.add_argument("--mono_prefix", type=str, default=None,
                       help="Monolingual data prefix.")
   parser.add_argument("--Qx_encoder", type=str, default="positional",
-                      help="Source inference model encoder type: positional|birnn")
+                      help="Source inference model encoder type: positional|birnn|sutskever")
   parser.add_argument("--Qx_decoder", type=str, default="diagonal",
-                      help="Source inference model decoder type: diagonal|rnn")
+                      help="Source inference model decoder type: diagonal|rnn|det_rnn")
   parser.add_argument("--Qx_covariance", type=str, default="diagonal",
                       help="Covariance options for Gaussian source observation "
                            "models, options: diagonal|full")

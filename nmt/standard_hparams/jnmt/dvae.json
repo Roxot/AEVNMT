@@ -1,8 +1,8 @@
 {
   "joint_model_type": "dvae",
   "num_lm_layers": 1,
-  "Qx_encoder": "positional",
-  "Qx_decoder": "diagonal",
+  "Qx_encoder": "birnn",
+  "Qx_decoder": "det_rnn",
   "z_dim": 256,
   "z_inference_amortization": "full",
   "check_convergence_every": 500,

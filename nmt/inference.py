@@ -102,7 +102,7 @@ def inference(ckpt,
   elif hparams.joint_model_type == "cbaseline":
     model_creator = CBaselineModel
   elif hparams.joint_model_type == "dsimple":
-    model_creator = joint.DSimpleJoint
+    model_creator = joint.DSimpleJointModel
   elif hparams.joint_model_type == "dvae":
     model_creator = joint.DVAEJointModel
   elif hparams.joint_model_type == "csimple":

@@ -21,6 +21,7 @@ class BaselineModel(AttentionModel):
 
     # For use for numerical stability.
     self.epsilon = 1e-10
+    self.iterator = iterator
 
     super(BaselineModel, self).__init__(hparams=hparams, mode=mode,
         iterator=iterator, source_vocab_table=source_vocab_table,

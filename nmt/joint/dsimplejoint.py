@@ -56,7 +56,6 @@ class DSimpleJointModel(BaselineModel):
     dtype = tf.float32
     with tf.variable_scope(scope or "dynamic_seq2seq", dtype=dtype):
 
-      self.iterator = iterator
       self.initializer = iterator.initializer
       self.mono_initializer = iterator.mono_initializer
       self.mono_batch = iterator.mono_batch

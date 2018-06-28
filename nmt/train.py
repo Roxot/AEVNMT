@@ -411,7 +411,7 @@ def train(hparams, scope=None, target_session=""):
     start_time = time.time()
     try:
 
-      train_feed_dict[loaded_train_model.mono_batch] = monolingual_batch
+      train_feed_dict[loaded_train_model.iterator.mono_batch] = monolingual_batch
       if hparams.KL_annealing_steps > 0:
         train_feed_dict[loaded_train_model.complexity_factor] = complexity_factor.alpha()
 
@@ -426,7 +426,7 @@ def train(hparams, scope=None, target_session=""):
       # VI models.
       if use_elbo:
         elbo = -step_result[1]
-        if monolingual_batch:
+        if monolingual_batch and not hparams.synthetic_prefix:
           info["ss_elbo"] = elbo
           mono_step_summary = step_result[3]
         else:

@@ -415,7 +415,7 @@ class BaselineModel(AttentionModel):
   # a monolingual batch or not.
   def train(self, sess, feed_dict={}):
     assert self.mode == tf.contrib.learn.ModeKeys.TRAIN
-    if feed_dict[self.mono_batch]:
+    if self.mono_batch in feed_dict and feed_dict[self.mono_batch]:
       train_summary = self.mono_summary
     else:
       train_summary = self.bi_summary

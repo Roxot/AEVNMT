@@ -56,9 +56,14 @@ class DSimpleJointModel(BaselineModel):
     dtype = tf.float32
     with tf.variable_scope(scope or "dynamic_seq2seq", dtype=dtype):
 
+      self.iterator = iterator
       self.initializer = iterator.initializer
       self.mono_initializer = iterator.mono_initializer
       self.mono_batch = iterator.mono_batch
+
+      # No semi-supervised training for back-translation data.
+      if hparams.synthetic_prefix:
+        self.mono_batch = tf.constant(False)
 
       # Change the data depending on what type of batch we're training on.
       self.target_input, self.target_output, self.target_sequence_length = tf.cond(
@@ -81,7 +86,6 @@ class DSimpleJointModel(BaselineModel):
                             tf.one_hot(iterator.source_output, self.src_vocab_size,
                                        dtype=tf.float32),
                             iterator.source_sequence_length))
-
 
 
   # Overrides model.build_graph

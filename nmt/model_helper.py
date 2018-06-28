@@ -90,7 +90,7 @@ def create_train_model(
     synth_datasets = None
     if hparams.mono_prefix is not None:
       mono_batch = tf.placeholder(tf.bool, name="mono_batch_placeholder")
-      mono_file_txt = "%s.%s.txt" % (hparams.mono_prefix, hparams.tgt)
+      mono_file_txt = "%s.%s" % (hparams.mono_prefix, hparams.tgt)
       mono_file_len = "%s.%s.len" % (hparams.mono_prefix, hparams.tgt)
       mono_txt_dataset = tf.data.TextLineDataset(mono_file_txt)
       pred_src_len_dataset = tf.data.TextLineDataset(mono_file_len)

@@ -259,6 +259,45 @@ class DSimpleJointModel(BaselineModel):
 
     return inferred_source
 
+  def _deterministic_rnn_decoder_with_attention(self, encoder_outputs, final_state,
+      target_length, predicted_source_length, hparams):
+
+    max_source_length = tf.reduce_max(predicted_source_length)
+    encoder_output = tf.tile(tf.expand_dims(final_state, 1),
+        [1, max_source_length, 1])
+    inputs = enrich_embeddings_with_positions(encoder_output,
+        hparams.num_units, "positional_embeddings")
+    if self.time_major:
+      inputs = self._transpose_time_major(inputs)
+
+    attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
+        hparams.num_units, encoder_outputs,
+        memory_sequence_length=target_length)
+
+    cell = tf.contrib.rnn.GRUCell(hparams.num_units)
+    cell = tf.contrib.seq2seq.AttentionWrapper(
+        cell,
+        attention_mechanism,
+        attention_layer_size=hparams.num_units,
+        alignment_history=False,
+        output_attention=False,
+        name="attention")
+
+    decoder_outputs, _ = tf.nn.dynamic_rnn(cell, inputs,
+        sequence_length=predicted_source_length,
+        time_major=self.time_major,
+        dtype=inputs.dtype)
+
+    # Return batch major.
+    if self.time_major:
+      decoder_outputs = self._transpose_time_major(decoder_outputs)
+
+    logits = tf.layers.dense(decoder_outputs, self.src_vocab_size)
+    std_gumbel_sample = self.gumbel.random_standard(tf.shape(logits))
+    inferred_source = tf.nn.softmax(logits + std_gumbel_sample)
+
+    return inferred_source
+
   def _deterministic_rnn_decoder(self, encoder_outputs, final_state,
       target_length, predicted_source_length, hparams):
 
@@ -370,6 +409,10 @@ class DSimpleJointModel(BaselineModel):
         elif hparams.Qx_decoder == "det_rnn":
           inferred_source = self._deterministic_rnn_decoder(encoder_outputs,
               encoder_state, target_length, predicted_source_length, hparams)
+        elif hparams.Qx_decoder == "det_rnn_att":
+          inferred_source = self._deterministic_rnn_decoder_with_attention(
+              encoder_outputs, encoder_state, target_length,
+              predicted_source_length, hparams)
         else:
           raise ValueError("Unknown Qx_decoder type: %s" % hparams.Qx_decoder)
 

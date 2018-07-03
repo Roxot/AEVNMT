@@ -39,6 +39,7 @@ class DVAEJointModel(DSimpleJointModel):
           tf.summary.scalar("supervised_tm_loss", self._tm_loss),
           tf.summary.scalar("supervised_lm_loss", self._lm_loss),
           tf.summary.scalar("supervised_KL_Z", self._KL_Z),
+          tf.summary.scalar("supervised_KL_Z_networks", self._KL_Z_networks),
           tf.summary.scalar("supervised_lm_accuracy", self._lm_accuracy)])
       self.mono_summary = tf.summary.merge([
           self._base_summaries,
@@ -48,6 +49,7 @@ class DVAEJointModel(DSimpleJointModel):
           tf.summary.scalar("semi_supervised_tm_loss", self._tm_loss),
           tf.summary.scalar("semi_supervised_lm_loss", self._lm_loss),
           tf.summary.scalar("semi_supervised_KL_Z", self._KL_Z),
+          tf.summary.scalar("supervised_KL_Z_networks", self._KL_Z_networks),
           tf.summary.scalar("semi_supervised_entropy", self._entropy)])
 
   # Overrides Model.eval
@@ -58,43 +60,37 @@ class DVAEJointModel(DSimpleJointModel):
 
   # Infers z from embeddings, using either fully or less amortized VI.
   # Returns a sample (or the mean), and the latent variables themselves.
-  # If the amortization option is set to full, Z_bi and Z_mono will be
-  # identical.
   def infer_z(self, hparams):
 
     # Infer z from the embeddings
-    if hparams.z_inference_amortization == "full":
-      utils.print_out(" using fully amortized inference for inferring z")
-      Z = self._infer_z_from_embeddings(hparams, use_target=False)
+    if hparams.z_inference_from == "source_only":
+      utils.print_out(" Inferring z from source only")
+      Z_x = self._infer_z_from_embeddings(hparams, use_target=False)
 
       # Either use a sample or the mean.
       if self.mode != tf.contrib.learn.ModeKeys.INFER:
-        z_sample = Z.sample()
+        z_sample = Z_x.sample()
       else:
-        z_sample = Z.mean()
+        z_sample = Z_x.mean()
 
-      return z_sample, Z
-    elif hparams.z_inference_amortization == "less":
-      utils.print_out(" using less amortized inference for inferring z,"
-          " meaning we have separate inference networks for monolingual and"
-          " bilingual data.")
-      Z_mono = self._infer_z_from_embeddings(hparams,
-          scope_name="z_monolingual_inference_model", use_target=True)
-      Z_bi = self._infer_z_from_embeddings(hparams,
-          scope_name="z_bilingual_inference_model", use_target=False)
+      return z_sample, Z_x
+    elif hparams.z_inference_from == "source_target":
+      utils.print_out(" Inferring z from both source and target")
+      Z_xy = self._infer_z_from_embeddings(hparams,
+          scope_name="z_inference_model_xy", use_target=True)
+      Z_x = self._infer_z_from_embeddings(hparams,
+          scope_name="z_inference_model_x", use_target=False)
 
       # Either use a sample or the mean.
-      if self.mode != tf.contrib.learn.ModeKeys.INFER:
-        z_sample = tf.cond(self.mono_batch,
-            true_fn=lambda: Z_mono.sample(),
-            false_fn=lambda: Z_bi.sample())
+      if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
+        z_sample = Z_xy.sample()
       else:
-        z_sample = Z_bi.mean()
+        z_sample = Z_x.mean()
 
-      return z_sample, (Z_bi, Z_mono)
+      return z_sample, (Z_x, Z_xy)
     else:
-      raise ValueError("Unknown z inference amortization option:"
-          " %s" % hparams.z_inference_amortization)
+      raise ValueError("Unknown z inference from option:"
+          " %s" % hparams.z_inference_from)
 
   # Overrides model.build_graph
   def build_graph(self, hparams, scope=None):
@@ -122,9 +118,9 @@ class DVAEJointModel(DSimpleJointModel):
         if self.mode != tf.contrib.learn.ModeKeys.INFER:
           with tf.device(model_helper.get_device_str(self.num_encoder_layers - 1,
                                                      self.num_gpus)):
-             
+
             loss, components = self._compute_loss(tm_logits, lm_logits,
-                Z, less_amortized=(hparams.z_inference_amortization == "less"))
+                Z, Z_source_target=(hparams.z_inference_from == "source_target"))
         else:
           loss = None
 
@@ -134,6 +130,7 @@ class DVAEJointModel(DSimpleJointModel):
       self._lm_loss = components[1]
       self._KL_Z = components[2]
       self._entropy = components[3]
+      self._KL_Z_networks = components[4]
       self._elbo = -loss
 
       self._lm_accuracy = self._compute_accuracy(lm_logits,
@@ -275,7 +272,7 @@ class DVAEJointModel(DSimpleJointModel):
     return tf.contrib.distributions.MultivariateNormalDiag(z_mu, z_sigma)
 
   # Overrides SimpleJointModel._compute_loss
-  def _compute_loss(self, tm_logits, lm_logits, Z, less_amortized=False):
+  def _compute_loss(self, tm_logits, lm_logits, Z, Z_source_target=False):
 
     # The cross-entropy under a reparameterizable sample of the latent variable(s).
     tm_loss = self._compute_categorical_loss(tm_logits,
@@ -298,20 +295,27 @@ class DVAEJointModel(DSimpleJointModel):
 
     # We compute an analytical KL between the Gaussian variational approximation
     # and its Gaussian prior.
-    if less_amortized:
-      Z_bi, Z_mono = Z
+    if Z_source_target:
+      Z_x, Z_xy = Z
+      if self.mode != tf.contrib.learn.ModeKeys.TRAIN:
+        KL_Z_networks = tf.constant(0.)
+      else:
+        Z_xy_sg = tf.contrib.distributions.MultivariateNormalDiag(
+            tf.stop_gradient(Z_xy.mean()), tf.stop_gradient(Z_xy.stddev()))
+        KL_Z_networks = Z_xy_sg.kl_divergence(Z_x) + Z_x.kl_divergence(Z_xy_sg)
+        KL_Z_networks = tf.reduce_mean(KL_Z_networks)
+
       standard_normal = tf.contrib.distributions.MultivariateNormalDiag(
-          tf.zeros_like(Z_bi.mean()), tf.ones_like(Z_bi.stddev()))
-      KL_Z = tf.cond(self.mono_batch,
-          true_fn=lambda: Z_mono.kl_divergence(standard_normal),
-          false_fn=lambda: Z_bi.kl_divergence(standard_normal))
+          tf.zeros_like(Z_xy.mean()), tf.ones_like(Z_xy.stddev()))
+      KL_Z = Z_xy.kl_divergence(standard_normal)
     else:
       standard_normal = tf.contrib.distributions.MultivariateNormalDiag(
           tf.zeros_like(Z.mean()), tf.ones_like(Z.stddev()))
       KL_Z = Z.kl_divergence(standard_normal)
+      KL_Z_networks = tf.constant(0.)
 
     KL_Z = tf.reduce_mean(KL_Z)
     self.KL = KL_Z
 
-    return tm_loss + lm_loss + self.complexity_factor * KL_Z - entropy, \
-        (tm_loss, lm_loss, KL_Z, entropy)
+    return tm_loss + lm_loss + self.complexity_factor * KL_Z - entropy + KL_Z_networks, \
+        (tm_loss, lm_loss, KL_Z, entropy, KL_Z_networks)

@@ -58,10 +58,11 @@ def add_arguments(parser):
                       help="Covariance options for Gaussian source observation "
                            "models, options: diagonal|full")
   parser.add_argument("--z_dim", type=str, default=32, help="Dimensionality of z")
-  parser.add_argument("--z_inference_amortization", type=str, default="full",
+  parser.add_argument("--z_inference_from", type=str, default="source_only",
                       help="Will use either a single or two inference networks "
-                           "for z, one for bilingual batches and one for "
-                           "monolingual batches: full|less")
+                           "for z, to do inference either always from source or"
+                           " during training for source and target:"
+                           " source_only|source_target")
   parser.add_argument("--check_convergence_every", type=int, default=0,
                       help="After the set number of steps, check for BLEU convergence"
                            " every x steps.")
@@ -332,7 +333,7 @@ def create_hparams(flags):
       Qx_decoder=flags.Qx_decoder,
       Qx_covariance=flags.Qx_covariance,
       z_dim=flags.z_dim,
-      z_inference_amortization=flags.z_inference_amortization,
+      z_inference_from=flags.z_inference_from,
       check_convergence_every=flags.check_convergence_every,
       word_dropout=flags.word_dropout,
       KL_annealing_steps=flags.KL_annealing_steps,

@@ -5,7 +5,7 @@
   "Qx_decoder": "diagonal",
   "Qx_covariance": "diagonal",
   "z_dim": 256,
-  "z_inference_amortization": "full",
+  "z_inference_from": "source_only",
   "check_convergence_every": 500,
   "word_dropout": 0.0,
   "KL_annealing_steps": 0,

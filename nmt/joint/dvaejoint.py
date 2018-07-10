@@ -39,7 +39,7 @@ class DVAEJointModel(DSimpleJointModel):
           tf.summary.scalar("supervised_tm_loss", self._tm_loss),
           tf.summary.scalar("supervised_lm_loss", self._lm_loss),
           tf.summary.scalar("supervised_KL_Z", self._KL_Z),
-          tf.summary.scalar("supervised_KL_Z_networks", self._KL_Z_networks),
+          tf.summary.scalar("supervised_Z_networks_loss", self._Z_networks_loss),
           tf.summary.scalar("supervised_lm_accuracy", self._lm_accuracy)])
       self.mono_summary = tf.summary.merge([
           self._base_summaries,
@@ -49,7 +49,7 @@ class DVAEJointModel(DSimpleJointModel):
           tf.summary.scalar("semi_supervised_tm_loss", self._tm_loss),
           tf.summary.scalar("semi_supervised_lm_loss", self._lm_loss),
           tf.summary.scalar("semi_supervised_KL_Z", self._KL_Z),
-          tf.summary.scalar("supervised_KL_Z_networks", self._KL_Z_networks),
+          tf.summary.scalar("supervised_Z_networks_loss", self._Z_networks_loss),
           tf.summary.scalar("semi_supervised_entropy", self._entropy)])
 
   # Overrides Model.eval
@@ -78,14 +78,24 @@ class DVAEJointModel(DSimpleJointModel):
       utils.print_out(" Inferring z from both source and target")
       Z_xy = self._infer_z_from_embeddings(hparams,
           scope_name="z_inference_model_xy", use_target=True)
+
+      if hparams.r_train_mode == "l2":
+        deterministic_Z_x = True
+      else:
+        deterministic_Z_x = False
+
       Z_x = self._infer_z_from_embeddings(hparams,
-          scope_name="z_inference_model_x", use_target=False)
+          scope_name="z_inference_model_x", use_target=False,
+          deterministic=deterministic_Z_x)
 
       # Either use a sample or the mean.
       if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
         z_sample = Z_xy.sample()
       else:
-        z_sample = Z_x.mean()
+        if deterministic_Z_x:
+          z_sample = Z_x
+        else:
+          z_sample = Z_x.mean()
 
       return z_sample, (Z_x, Z_xy)
     else:
@@ -120,7 +130,8 @@ class DVAEJointModel(DSimpleJointModel):
                                                      self.num_gpus)):
 
             loss, components = self._compute_loss(tm_logits, lm_logits,
-                Z, Z_source_target=(hparams.z_inference_from == "source_target"))
+                Z, Z_source_target=(hparams.z_inference_from == "source_target"),
+                r_train_mode=hparams.r_train_mode)
         else:
           loss = None
 
@@ -130,7 +141,7 @@ class DVAEJointModel(DSimpleJointModel):
       self._lm_loss = components[1]
       self._KL_Z = components[2]
       self._entropy = components[3]
-      self._KL_Z_networks = components[4]
+      self._Z_networks_loss = components[4]
       self._elbo = -loss
 
       self._lm_accuracy = self._compute_accuracy(lm_logits,
@@ -140,7 +151,7 @@ class DVAEJointModel(DSimpleJointModel):
     return tm_logits, loss, final_context_state, sample_id
 
   def _infer_z_from_embeddings(self, hparams, scope_name="z_inference_model",
-      use_target=False):
+      use_target=False, deterministic=False):
     with tf.variable_scope(scope_name) as scope:
       dtype = scope.dtype
       num_layers = self.num_encoder_layers
@@ -216,6 +227,9 @@ class DVAEJointModel(DSimpleJointModel):
             hparams.z_dim,
             activation=None)
 
+      if deterministic:
+        return z_mu
+
       with tf.variable_scope("stddev_inference_network"):
         z_sigma = tf.layers.dense(
             tf.layers.dense(average_encoding, hparams.z_dim,
@@ -272,7 +286,8 @@ class DVAEJointModel(DSimpleJointModel):
     return tf.contrib.distributions.MultivariateNormalDiag(z_mu, z_sigma)
 
   # Overrides SimpleJointModel._compute_loss
-  def _compute_loss(self, tm_logits, lm_logits, Z, Z_source_target=False):
+  def _compute_loss(self, tm_logits, lm_logits, Z, Z_source_target=False,
+      r_train_mode="KLq"):
 
     # The cross-entropy under a reparameterizable sample of the latent variable(s).
     tm_loss = self._compute_categorical_loss(tm_logits,
@@ -298,12 +313,26 @@ class DVAEJointModel(DSimpleJointModel):
     if Z_source_target:
       Z_x, Z_xy = Z
       if self.mode != tf.contrib.learn.ModeKeys.TRAIN:
-        KL_Z_networks = tf.constant(0.)
+        Z_networks_loss = tf.constant(0.)
       else:
-        Z_xy_sg = tf.contrib.distributions.MultivariateNormalDiag(
-            tf.stop_gradient(Z_xy.mean()), tf.stop_gradient(Z_xy.stddev()))
-        KL_Z_networks = Z_xy_sg.kl_divergence(Z_x) + Z_x.kl_divergence(Z_xy_sg)
-        KL_Z_networks = tf.reduce_mean(KL_Z_networks)
+        if r_train_mode == "l2":
+          utils.print_out("Using l2 train mode for r.")
+          Z_networks_loss = tf.nn.l2_loss(Z_x - Z_xy.mean())
+        elif r_train_mode == "KLq":
+          utils.print_out("Using KLq train mode for r.")
+          Z_networks_loss = Z_xy.kl_divergence(Z_x)
+          Z_networks_loss = tf.reduce_mean(Z_networks_loss)
+        elif r_train_mode == "KLr":
+          utils.print_out("Using KLr train mode for r.")
+          Z_networks_loss = Z_x.kl_divergence(Z_xy)
+          Z_networks_loss = tf.reduce_mean(Z_networks_loss)
+        elif r_train_mode == "JS":
+          utils.print_out("Using JS train mode for r.")
+          Z_networks_loss = Z_xy.kl_divergence(Z_x) + Z_x.kl_divergence(Z_xy)
+          Z_networks_loss = tf.reduce_mean(Z_networks_loss)
+        else:
+          raise ValueError("Unknown value for r_train_mode: %s" % r_train_mode)
+        Z_networks_loss *= self.complexity_factor
 
       standard_normal = tf.contrib.distributions.MultivariateNormalDiag(
           tf.zeros_like(Z_xy.mean()), tf.ones_like(Z_xy.stddev()))
@@ -312,10 +341,10 @@ class DVAEJointModel(DSimpleJointModel):
       standard_normal = tf.contrib.distributions.MultivariateNormalDiag(
           tf.zeros_like(Z.mean()), tf.ones_like(Z.stddev()))
       KL_Z = Z.kl_divergence(standard_normal)
-      KL_Z_networks = tf.constant(0.)
+      Z_networks_loss = tf.constant(0.)
 
     KL_Z = tf.reduce_mean(KL_Z)
     self.KL = KL_Z
 
-    return tm_loss + lm_loss + self.complexity_factor * KL_Z - entropy + KL_Z_networks, \
-        (tm_loss, lm_loss, KL_Z, entropy, KL_Z_networks)
+    return tm_loss + lm_loss + self.complexity_factor * KL_Z - entropy + Z_networks_loss, \
+        (tm_loss, lm_loss, KL_Z, entropy, Z_networks_loss)

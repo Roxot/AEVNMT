@@ -63,6 +63,8 @@ def add_arguments(parser):
                            "for z, to do inference either always from source or"
                            " during training for source and target:"
                            " source_only|source_target")
+  parser.add_argument("--r_train_mode", type=str, default="KLq",
+                      help="JS|KLq|KLr|l2")
   parser.add_argument("--check_convergence_every", type=int, default=0,
                       help="After the set number of steps, check for BLEU convergence"
                            " every x steps.")
@@ -334,6 +336,7 @@ def create_hparams(flags):
       Qx_covariance=flags.Qx_covariance,
       z_dim=flags.z_dim,
       z_inference_from=flags.z_inference_from,
+      r_train_mode=flags.r_train_mode,
       check_convergence_every=flags.check_convergence_every,
       word_dropout=flags.word_dropout,
       KL_annealing_steps=flags.KL_annealing_steps,

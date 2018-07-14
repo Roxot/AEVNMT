@@ -58,7 +58,6 @@ class DVAEJointModel(DSimpleJointModel):
     return sess.run([self.eval_loss,
         self.KL, self.predict_count, self.batch_size])
 
-  # Infers z from embeddings, using either fully or less amortized VI.
   # Returns a sample (or the mean), and the latent variables themselves.
   def infer_z(self, hparams):
 

@@ -59,6 +59,8 @@ class CVAEJointModel(CSimpleJointModel, DVAEJointModel):
     with tf.variable_scope(scope or "dynamic_seq2seq", dtype=dtype):
 
       z_sample, Z = self.infer_z(hparams)
+      if hparams.infer_z_from == "source_target":
+        raise NotImplementedError("source_target option not yet implemented for cvae")
 
       with tf.variable_scope("generative_model", dtype=dtype):
 
@@ -79,7 +81,7 @@ class CVAEJointModel(CSimpleJointModel, DVAEJointModel):
           with tf.device(model_helper.get_device_str(self.num_encoder_layers - 1,
                                                      self.num_gpus)):
             loss, components = self._compute_loss(tm_logits, gauss_observations,
-                Z, less_amortized=(hparams.z_inference_amortization == "less"))
+                Z)
         else:
           loss = None
 

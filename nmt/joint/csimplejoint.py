@@ -192,6 +192,112 @@ class CSimpleJointModel(DSimpleJointModel):
 
       return self.Qx.sample()
 
+  # Overrides dsimplejoint._deterministic_rnn_decoder_with_attention
+  def _deterministic_rnn_decoder_with_attention(self, encoder_outputs, final_state,
+      target_length, predicted_source_length, hparams):
+
+    max_source_length = tf.reduce_max(predicted_source_length)
+    encoder_output = tf.tile(tf.expand_dims(final_state, 1),
+        [1, max_source_length, 1])
+    inputs = enrich_embeddings_with_positions(encoder_output,
+        hparams.num_units, "positional_embeddings")
+    if self.time_major:
+      inputs = self._transpose_time_major(inputs)
+
+    attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
+        hparams.num_units, encoder_outputs,
+        memory_sequence_length=target_length)
+
+    cell = tf.contrib.rnn.GRUCell(hparams.num_units)
+    cell = tf.contrib.seq2seq.AttentionWrapper(
+        cell,
+        attention_mechanism,
+        attention_layer_size=hparams.num_units,
+        alignment_history=False,
+        output_attention=False,
+        name="attention")
+
+    decoder_outputs, _ = tf.nn.dynamic_rnn(cell, inputs,
+        sequence_length=predicted_source_length,
+        time_major=self.time_major,
+        dtype=inputs.dtype)
+
+    # Return batch major.
+    if self.time_major:
+      decoder_outputs = self._transpose_time_major(decoder_outputs)
+
+    mean = tf.layers.dense(decoder_outputs, self.src_embed_size)
+
+    if hparams.Qx_covariance == "diagonal":
+      stddev = tf.layers.dense(decoder_outputs, self.src_embed_size)
+      self.Qx = tf.contrib.distributions.MultivariateNormalDiag(loc=mean,
+          scale_diag=stddev)
+    elif hparams.Qx_covariance == "full":
+
+      # Predict the cholesky factor.
+      cov_matrix_values = tf.layers.dense(decoder_outputs,
+          self.src_embed_size * self.src_embed_size)
+      cov_matrix = tf.reshape(cov_matrix_values,
+          [self.batch_size, tf.reduce_max(predicted_source_length),
+          self.src_embed_size, self.src_embed_size])
+      cholesky = tf.contrib.distributions.matrix_diag_transform(cov_matrix,
+          transform=tf.nn.softplus)
+
+      self.Qx = tf.contrib.distributions.MultivariateNormalTriL(
+          loc=mean, scale_tril=cholesky)
+    else:
+      raise ValueError("Unknown value for Qx_covariance: %s" % \
+          hparams.Qx_covariance)
+
+    return self.Qx.sample()
+
+  # Overrides dsimplejoint._deterministic_rnn_decoder
+  def _deterministic_rnn_decoder(self, encoder_outputs, final_state,
+      target_length, predicted_source_length, hparams):
+
+    max_source_length = tf.reduce_max(predicted_source_length)
+    inputs = tf.tile(tf.expand_dims(final_state, 1),
+        [1, max_source_length, 1])
+    inputs = enrich_embeddings_with_positions(inputs,
+        hparams.num_units, "positional_embeddings")
+    if self.time_major:
+      inputs = self._transpose_time_major(inputs)
+
+    cell = tf.contrib.rnn.GRUCell(hparams.num_units)
+    decoder_outputs, _ = tf.nn.dynamic_rnn(cell, inputs,
+        sequence_length=predicted_source_length,
+        time_major=self.time_major,
+        dtype=inputs.dtype)
+
+    # Return batch major.
+    if self.time_major:
+      decoder_outputs = self._transpose_time_major(decoder_outputs)
+
+    mean = tf.layers.dense(decoder_outputs, self.src_embed_size)
+
+    if hparams.Qx_covariance == "diagonal":
+      stddev = tf.layers.dense(decoder_outputs, self.src_embed_size)
+      self.Qx = tf.contrib.distributions.MultivariateNormalDiag(loc=mean,
+          scale_diag=stddev)
+    elif hparams.Qx_covariance == "full":
+
+      # Predict the cholesky factor.
+      cov_matrix_values = tf.layers.dense(decoder_outputs,
+          self.src_embed_size * self.src_embed_size)
+      cov_matrix = tf.reshape(cov_matrix_values,
+          [self.batch_size, tf.reduce_max(predicted_source_length),
+          self.src_embed_size, self.src_embed_size])
+      cholesky = tf.contrib.distributions.matrix_diag_transform(cov_matrix,
+          transform=tf.nn.softplus)
+
+      self.Qx = tf.contrib.distributions.MultivariateNormalTriL(
+          loc=mean, scale_tril=cholesky)
+    else:
+      raise ValueError("Unknown value for Qx_covariance: %s" % \
+          hparams.Qx_covariance)
+
+    return self.Qx.sample()
+
   # Overrides DSimpleJointModel._rnn_decoder
   # Models X_i | y_1^n, x_<i as Gaussian variables.
   def _rnn_decoder(self, encoder_outputs, encoder_state, target_length,

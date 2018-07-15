@@ -76,6 +76,9 @@ def add_arguments(parser):
   parser.add_argument("--synthetic_prefix", type=str, default=None,
                       help="Prefix for synthetic data files: <prefix>.<tgt>"
                             " / <prefix>.translation.<src>")
+  parser.add_argument("--mono_real_ratio", type=int, default=1,
+                      help="synthetic or mono to real data ratio if "
+                            " synthetic_prefix or mono_preix is set.")
 
   # network
   parser.add_argument("--num_units", type=int, default=32, help="Network size.")
@@ -341,6 +344,7 @@ def create_hparams(flags):
       word_dropout=flags.word_dropout,
       KL_annealing_steps=flags.KL_annealing_steps,
       synthetic_prefix=flags.synthetic_prefix,
+      mono_real_ratio=flags.mono_real_ratio,
 
       # Data
       src=flags.src,

@@ -388,6 +388,7 @@ def train(hparams, scope=None, target_session=""):
   monolingual_batch = False
   num_bilingual_batches = 0
   num_monolingual_batches = 0
+  num_mono_since_last_real = 0
   mono_step_summary, bi_step_summary = (None, None)
   train_feed_dict = {}
 
@@ -436,7 +437,13 @@ def train(hparams, scope=None, target_session=""):
       # Switch between bilingual and monolingual batches if monolingual data
       # is given.
       if hparams.mono_prefix or hparams.synthetic_prefix:
-        monolingual_batch = not monolingual_batch
+        if not monolingual_batch:
+          monolingual_batch = not monolingual_batch
+        elif num_mono_since_last_real+1 >= hparams.mono_real_ratio:
+          num_mono_since_last_real = 0
+          monolingual_batch = not monolingual_batch
+        else:
+          num_mono_since_last_real += 1
     except tf.errors.OutOfRangeError:
 
       # Don't go to the next epoch if the monolingual iterator is

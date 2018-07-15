@@ -18,8 +18,6 @@ class CSimpleJointModel(DSimpleJointModel):
                target_vocab_table, reverse_target_vocab_table=None,
                scope=None, extra_args=None, no_summaries=False):
 
-    assert hparams.src_embed_file
-
     super(CSimpleJointModel, self).__init__(hparams=hparams, mode=mode,
         iterator=iterator, source_vocab_table=source_vocab_table,
         target_vocab_table=target_vocab_table,
@@ -229,7 +227,7 @@ class CSimpleJointModel(DSimpleJointModel):
     mean = tf.layers.dense(decoder_outputs, self.src_embed_size)
 
     if hparams.Qx_covariance == "diagonal":
-      stddev = tf.layers.dense(decoder_outputs, self.src_embed_size)
+      stddev = tf.layers.dense(decoder_outputs, self.src_embed_size, activation=tf.nn.sotftplus)
       self.Qx = tf.contrib.distributions.MultivariateNormalDiag(loc=mean,
           scale_diag=stddev)
     elif hparams.Qx_covariance == "full":
@@ -273,10 +271,12 @@ class CSimpleJointModel(DSimpleJointModel):
     if self.time_major:
       decoder_outputs = self._transpose_time_major(decoder_outputs)
 
-    mean = tf.layers.dense(decoder_outputs, self.src_embed_size)
+    with tf.variable_scope("mean_inference_net"):
+      mean = tf.layers.dense(decoder_outputs, self.src_embed_size)
 
     if hparams.Qx_covariance == "diagonal":
-      stddev = tf.layers.dense(decoder_outputs, self.src_embed_size)
+      with tf.variable_scope("stddev_inference_net"):
+        stddev = tf.layers.dense(decoder_outputs, self.src_embed_size, activation=tf.nn.softplus)
       self.Qx = tf.contrib.distributions.MultivariateNormalDiag(loc=mean,
           scale_diag=stddev)
     elif hparams.Qx_covariance == "full":

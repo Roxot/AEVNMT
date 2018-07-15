@@ -59,7 +59,7 @@ class CVAEJointModel(CSimpleJointModel, DVAEJointModel):
     with tf.variable_scope(scope or "dynamic_seq2seq", dtype=dtype):
 
       z_sample, Z = self.infer_z(hparams)
-      if hparams.infer_z_from == "source_target":
+      if hparams.z_inference_from == "source_target":
         raise NotImplementedError("source_target option not yet implemented for cvae")
 
       with tf.variable_scope("generative_model", dtype=dtype):

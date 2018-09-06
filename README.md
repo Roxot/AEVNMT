@@ -1,6 +1,6 @@
 # Auto-Encoding Variational NMT
 
-Link to paper: Coming soon!
+Link to paper: https://arxiv.org/abs/1807.10564
 
 This is a fork of [TensorFlow NMT](https://github.com/tensorflow/nmt). Have a look there for more details on installation and usage.
 
